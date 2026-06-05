@@ -1,0 +1,130 @@
+##############################################################################
+# k8s/rollout.yaml
+# Argo Rollouts Rollout resource — replaces a standard Deployment.
+# Implements a fully automated canary with a Prometheus metric gate.
+#
+# Canary steps:
+#   1. Route 10% traffic to canary pods
+#   2. Pause 2 minutes (human observation window)
+#   3. Run AnalysisRun — query Prometheus error rate on canary pods
+#      If error rate > 2%  → auto-abort, rollback to stable
+#      If error rate ≤ 2%  → auto-promote to next step
+#   4. Route 25% to canary → pause 2 minutes
+#   5. Route 50% to canary → auto-promote to full rollout
+#
+# Replace REPLACE_ACCOUNT_ID with your AWS account ID.
+##############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app: genesis-platform-api
+    project: genesis
+    managed-by: argocd
+spec:
+  replicas: 3
+  progressDeadlineSeconds: 600   # Abort if not progressing within 10 minutes
+  revisionHistoryLimit: 3
+
+  selector:
+    matchLabels:
+      app: genesis-platform-api
+
+  template:
+    metadata:
+      labels:
+        app: genesis-platform-api
+        version: stable              # updated to 'canary' on canary pods by Argo
+    spec:
+      serviceAccountName: genesis-platform-api
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: api
+          # Image tag is replaced by the CI pipeline with git-SHA tag
+          image: REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/genesis-platform-api:REPLACE_GIT_SHA
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          env:
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: APP_VERSION
+              value: "1.0.0"
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+  strategy:
+    canary:
+      # Service names — the stable service receives production traffic,
+      # the canary service is used during analysis
+      stableService: genesis-platform-api-stable
+      canaryService: genesis-platform-api-canary
+
+      # Traffic splitting via Argo Rollouts TrafficRouting (weight-based)
+      trafficRouting:
+        nginx:
+          stableIngress: genesis-platform-api-ingress
+
+      steps:
+        # Step 1 — send 10% to canary
+        - setWeight: 10
+        # Step 2 — pause 2 minutes (human observation + initial metric window)
+        - pause:
+            duration: 2m
+        # Step 3 — AnalysisRun: query Prometheus error rate on canary pods
+        #   error rate > 2%  → auto-abort and rollback to stable
+        #   error rate ≤ 2%  → auto-promote to next step
+        - analysis:
+            templates:
+              - templateName: genesis-api-error-rate
+            args:
+              - name: service-name
+                value: genesis-platform-api-canary
+        # Step 4 — 25% traffic split, pause 2 minutes
+        - setWeight: 25
+        - pause:
+            duration: 2m
+        # Step 5 — 50% traffic split
+        - setWeight: 50
+        # Step 6 — Full rollout (100%)
+        - setWeight: 100

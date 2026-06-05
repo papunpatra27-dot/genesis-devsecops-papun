@@ -1,0 +1,349 @@
+##############################################################################
+# .github/workflows/ci.yml
+#
+# PR pipeline — Stages 1–11 (runs on every pull_request to main).
+# Stages 12–13 live in deploy.yml and trigger only on push to main.
+#
+# FAIL-FAST DEPENDENCY CHAIN:
+#   Stage 1 (Gitleaks) runs inside the 'security-scan' reusable job.
+#   If Stage 1 fails → security-scan job fails → ALL other jobs are skipped
+#   because every other job has `needs: [security-scan]` directly or
+#   transitively. This is the architectural guarantee of the fail-fast model.
+#
+#   security-scan (1-4)
+#     ├── docker-build (5)         parallel with tflint/checkov/kyverno
+#     │     ├── trivy-scan (6)
+#     │     ├── sbom (7)
+#     │     └── cosign-verify (8)  (dry-run; actual ECR signing in deploy.yml)
+#     ├── tflint (9)               parallel with docker-build
+#     ├── checkov (10)             parallel with docker-build
+#     └── kyverno-validate (11)    parallel with docker-build
+##############################################################################
+name: CI Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  security-events: write   # Upload SARIF to GitHub Security tab
+  actions: read
+  pull-requests: write
+  id-token: write          # Cosign OIDC toolchain verify (Stage 8)
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: genesis-platform-api
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  ##############################################################################
+  # Stages 1–4 — Delegated to the reusable security-scan.yml workflow.
+  #
+  # Inside that workflow:
+  #   Stage 1: Gitleaks secret scan   ← blocks ALL downstream if it fails
+  #   Stage 2: pip-audit              ← needs Stage 1
+  #   Stage 3: Semgrep SAST           ← needs Stage 1 (Flaw 2 must appear)
+  #   Stage 4: pytest ≥ 75% coverage  ← needs Stage 1
+  ##############################################################################
+  security-scan:
+    name: "Stages 1-4 — Security Scanning"
+    uses: ./.github/workflows/security-scan.yml
+    with:
+      python-version: "3.12"
+    secrets: inherit
+
+  ##############################################################################
+  # Stage 5 — Docker Build (multi-stage, non-root)
+  # Gate: NO — failure does not block pipeline itself; but Stages 6-8 skip.
+  # Evidence: image tagged sha-<git-short-sha>; verified UID ≠ 0.
+  # NOTE: PRs do NOT push to ECR. ECR push happens only in deploy.yml.
+  ##############################################################################
+  docker-build:
+    name: "Stage 5 — Docker Build (local, no push)"
+    runs-on: ubuntu-latest
+    needs: [security-scan]
+    outputs:
+      sha-tag: ${{ steps.meta.outputs.sha-tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute git-SHA image tag
+        id: meta
+        run: |
+          SHA_TAG="sha-$(git rev-parse --short HEAD)"
+          echo "sha-tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Image tag: ${SHA_TAG}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build multi-stage image (builder + runtime, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          push: false
+          tags: |
+            ${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.sha-tag }}
+            ${{ env.ECR_REPOSITORY }}:ci-latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=/tmp/image.tar
+
+      - name: Assert container does NOT run as root
+        run: |
+          docker load --input /tmp/image.tar
+          UID_VAL=$(docker run --rm --entrypoint id \
+            "${{ env.ECR_REPOSITORY }}:ci-latest" -u 2>/dev/null)
+          echo "Container UID: ${UID_VAL}"
+          [ "${UID_VAL}" = "0" ] && echo "❌ Runs as root — fix Dockerfile!" && exit 1
+          echo "✅ Non-root (UID=${UID_VAL})"
+
+      - name: Upload image tar for Stages 6–8
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ steps.meta.outputs.sha-tag }}
+          path: /tmp/image.tar
+          retention-days: 1
+
+  ##############################################################################
+  # Stage 6 — Image Vulnerability Scan (Trivy)
+  # Gate: YES — CRITICAL findings block.
+  ##############################################################################
+  trivy-scan:
+    name: "Stage 6 — Trivy Image Scan"
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ needs.docker-build.outputs.sha-tag }}
+          path: /tmp
+
+      - name: Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: Trivy — SARIF report (blocks on CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
+          format: sarif
+          output: trivy-results.sarif
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Trivy — JSON report artifact (HIGH + CRITICAL)
+        if: always()
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
+          format: json
+          output: reports/trivy-report.json
+          severity: HIGH,CRITICAL
+
+      - name: Upload Trivy JSON artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-report
+          path: reports/trivy-report.json
+
+  ##############################################################################
+  # Stage 7 — SBOM Generation (Syft / CycloneDX)
+  # Gate: NO — supply-chain audit artifact.
+  ##############################################################################
+  sbom:
+    name: "Stage 7 — SBOM (Syft/CycloneDX)"
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image-${{ needs.docker-build.outputs.sha-tag }}
+          path: /tmp
+
+      - name: Load image
+        run: docker load --input /tmp/image.tar
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: "${{ env.ECR_REPOSITORY }}:ci-latest"
+          format: cyclonedx-json
+          output-file: "reports/sbom-${{ needs.docker-build.outputs.sha-tag }}.cdx.json"
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: "reports/sbom-*.cdx.json"
+
+  ##############################################################################
+  # Stage 8 — Cosign toolchain verification (PR dry-run)
+  # Gate: NO
+  # On PRs: verify Cosign is available + OIDC token works.
+  # Actual ECR push + keyless signing happens in deploy.yml on push to main.
+  ##############################################################################
+  cosign-verify:
+    name: "Stage 8 — Cosign OIDC Verify (dry-run)"
+    runs-on: ubuntu-latest
+    # Needs docker-build to get sha-tag output AND to ensure trivy+sbom completed.
+    # trivy-scan and sbom both need docker-build, so this is also transitive.
+    needs: [docker-build, trivy-scan, sbom]
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Verify Cosign + OIDC availability
+        run: |
+          echo "Cosign: $(cosign version 2>&1 | head -1)"
+          echo "SHA tag queued for ECR signing on merge: ${{ needs.docker-build.outputs.sha-tag }}"
+          echo "✅ Stage 8 verified — keyless signing will execute in deploy.yml"
+
+  ##############################################################################
+  # Stage 9 — IaC Lint (tflint)
+  # Gate: YES — zero errors; warnings documented.
+  # Runs in parallel with Stages 5-8 (needs only security-scan).
+  ##############################################################################
+  tflint:
+    name: "Stage 9 — tflint IaC Lint"
+    runs-on: ubuntu-latest
+    needs: [security-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up tflint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+
+      - name: tflint init (load AWS plugin from .tflint.hcl)
+        run: tflint --init
+
+      - name: Lint all modules and environments
+        run: |
+          ERRORS=0
+          for target in \
+            infrastructure/modules/networking \
+            infrastructure/modules/compute \
+            infrastructure/modules/iam \
+            infrastructure/modules/ecr \
+            infrastructure/modules/observability \
+            infrastructure/environments/dev \
+            infrastructure/environments/prod; do
+            echo "=== ${target} ==="
+            OUTPUT=$(tflint --chdir="${target}" --format=compact 2>&1 || true)
+            echo "${OUTPUT}"
+            ERRORS=$((ERRORS + $(echo "${OUTPUT}" | grep -c "^Error:" || true)))
+          done
+          echo ""
+          if [ "${ERRORS}" -gt 0 ]; then
+            echo "❌ tflint: ${ERRORS} error(s) — gate FAILED"
+            exit 1
+          fi
+          echo "✅ tflint: zero errors"
+
+  ##############################################################################
+  # Stage 10 — Checkov IaC Security Scan
+  # Gate: YES — CRITICAL findings block; report as artifact.
+  ##############################################################################
+  checkov:
+    name: "Stage 10 — Checkov IaC Scan"
+    runs-on: ubuntu-latest
+    needs: [security-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Checkov on Terraform
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infrastructure/
+          framework: terraform
+          output_format: json
+          output_file_path: reports/checkov_report.json
+          soft_fail: false
+          skip_check: CKV_AWS_130
+          download_external_modules: false
+
+      - name: Upload Checkov report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checkov-report
+          path: reports/checkov_report.json
+
+  ##############################################################################
+  # Stage 11 — Kyverno Manifest Validation (offline, no cluster needed)
+  # Gate: YES
+  #   • k8s/flawed-deployment.yaml (Flaw 3) MUST be blocked
+  #   • k8s/rollout.yaml and k8s/service.yaml MUST pass
+  ##############################################################################
+  kyverno-validate:
+    name: "Stage 11 — Kyverno Offline Validation"
+    runs-on: ubuntu-latest
+    needs: [security-scan]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Kyverno CLI
+        run: |
+          KYVERNO_VER="v1.12.0"
+          curl -sL "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VER}/kyverno-cli_linux_amd64.tar.gz" \
+            -o /tmp/kyverno.tar.gz
+          tar -xzf /tmp/kyverno.tar.gz -C /tmp kyverno
+          sudo install -m 0755 /tmp/kyverno /usr/local/bin/kyverno
+          kyverno version
+
+      - name: Validate CLEAN manifests — must PASS
+        run: |
+          mkdir -p reports
+          echo "=== Validating production manifests ==="
+          kyverno apply infrastructure/kyverno-policies/ \
+            --resource k8s/rollout.yaml \
+            --resource k8s/service.yaml \
+            2>&1 | tee reports/kyverno-clean-validation.txt
+          grep -qi "pass\|0 violation" reports/kyverno-clean-validation.txt \
+            && echo "✅ Clean manifests PASSED" \
+            || (echo "❌ Clean manifests unexpectedly FAILED" && exit 1)
+
+      - name: Validate FLAWED manifest — Flaw 3 must be BLOCKED
+        run: |
+          echo "=== Validating flawed manifest (Flaw 3 — expect violations) ==="
+          kyverno apply infrastructure/kyverno-policies/ \
+            --resource k8s/flawed-deployment.yaml \
+            2>&1 | tee reports/kyverno-flaw3-validation.txt
+          # Kyverno apply exits 0 even with violations; parse output
+          if grep -qi "violation\|fail\|policy.*block" reports/kyverno-flaw3-validation.txt; then
+            echo "✅ Flaw 3 CORRECTLY blocked by Kyverno Enforce policies"
+          else
+            echo "❌ Flawed manifest was NOT blocked — check policy enforcement mode"
+            exit 1
+          fi
+
+      - name: Upload Kyverno validation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kyverno-validation
+          path: reports/kyverno-*-validation.txt

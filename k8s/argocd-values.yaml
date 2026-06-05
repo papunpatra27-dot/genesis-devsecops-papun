@@ -1,0 +1,168 @@
+##############################################################################
+# k8s/argocd-values.yaml
+#
+# Helm values for Argo CD installation via Helm chart.
+# Used by:
+#   1. infrastructure/modules/compute/userdata.sh.tpl (automated first-boot)
+#   2. docs/dr-design.md runbook (manual re-install on DR)
+#
+# Install command:
+#   helm install argocd argo/argo-cd \
+#     --namespace argocd --create-namespace \
+#     --version 7.x \
+#     -f k8s/argocd-values.yaml
+#
+# This configuration is optimised for k3s single-node on EC2 t2.micro.
+# Resource limits are conservative to leave headroom for the app + monitoring.
+##############################################################################
+
+## ──────────────────────────────────────────────────────────────────────────
+## Global settings
+## ──────────────────────────────────────────────────────────────────────────
+global:
+  image:
+    tag: ""   # Use chart default (pinned to a stable release)
+
+## ──────────────────────────────────────────────────────────────────────────
+## Argo CD Server
+## ──────────────────────────────────────────────────────────────────────────
+server:
+  # NodePort exposure — accessible at http://<EC2-EIP>:30080
+  # HTTPS is terminated at the ALB or NGINX ingress; Argo CD runs insecure
+  # internally to avoid certificate management complexity on t2.micro.
+  service:
+    type: NodePort
+    nodePortHttp: 30080
+    nodePortHttps: 30443
+
+  # Run in insecure mode (HTTP) — TLS terminated upstream
+  extraArgs:
+    - --insecure
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Security: run as non-root
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    fsGroup: 999
+
+## ──────────────────────────────────────────────────────────────────────────
+## Argo CD Application Controller (reconciles Git ↔ cluster)
+## ──────────────────────────────────────────────────────────────────────────
+controller:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 512Mi
+
+  # Reconciliation interval — how often to poll Git for changes
+  env:
+    - name: ARGOCD_RECONCILIATION_TIMEOUT
+      value: "180s"   # 3-minute poll interval (webhook preferred for sub-30s)
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+
+## ──────────────────────────────────────────────────────────────────────────
+## Repo Server (clones Git repos, renders Helm/Kustomize)
+## ──────────────────────────────────────────────────────────────────────────
+repoServer:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+
+## ──────────────────────────────────────────────────────────────────────────
+## Redis (Argo CD internal cache)
+## ──────────────────────────────────────────────────────────────────────────
+redis:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+
+## ──────────────────────────────────────────────────────────────────────────
+## Argo CD Configuration (argocd-cm ConfigMap values)
+## ──────────────────────────────────────────────────────────────────────────
+configs:
+  cm:
+    # Allow anonymous read-only access to app status (useful for dashboards)
+    users.anonymous.enabled: "false"
+
+    # Git poll interval (fallback when no webhook configured)
+    timeout.reconciliation: "180s"
+
+    # Health checks for Argo Rollouts custom resources
+    resource.customizations.health.argoproj.io_Rollout: |
+      hs = {}
+      if obj.status ~= nil then
+        if obj.status.phase == "Degraded" then
+          hs.status = "Degraded"
+          hs.message = obj.status.message
+        elseif obj.status.phase == "Paused" then
+          hs.status = "Suspended"
+          hs.message = "Rollout is paused"
+        elseif obj.status.phase == "Progressing" then
+          hs.status = "Progressing"
+          hs.message = "Rollout is progressing"
+        elseif obj.status.phase == "Healthy" then
+          hs.status = "Healthy"
+          hs.message = ""
+        end
+      end
+      if hs.status == nil then
+        hs.status = "Progressing"
+        hs.message = "Waiting for rollout status"
+      end
+      return hs
+
+    # Ignore Rollout image field differences (managed by deploy.yml)
+    resource.customizations.ignoreDifferences.argoproj.io_Rollout: |
+      jqPathExpressions:
+        - .spec.template.spec.containers[].image
+
+  # Argo CD RBAC policy (admin-only for this single-env setup)
+  rbac:
+    policy.default: role:readonly
+    policy.csv: |
+      p, role:admin, applications, *, */*, allow
+      p, role:admin, clusters, *, *, allow
+      p, role:admin, repositories, *, *, allow
+      g, admin, role:admin
+
+## ──────────────────────────────────────────────────────────────────────────
+## Disable HA components (single-node k3s on t2.micro)
+## ──────────────────────────────────────────────────────────────────────────
+applicationSet:
+  enabled: false    # Not needed for single-repo single-env
+
+notifications:
+  enabled: false    # Reduce memory footprint on t2.micro
+
+dex:
+  enabled: false    # SSO not required; admin password auth is sufficient

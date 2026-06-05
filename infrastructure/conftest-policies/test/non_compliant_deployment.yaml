@@ -1,0 +1,32 @@
+# Non-compliant Deployment — violates guardrails 1 (no livenessProbe),
+# 2 (deployed in default namespace), and 4 (replicas not set).
+# Running: conftest test --policy infrastructure/conftest-policies/ this file
+# should produce 3 deny messages.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: non-compliant-example
+  namespace: default          # VIOLATION: must not use default namespace
+spec:
+  # replicas not set              # VIOLATION: must be >= 1
+  selector:
+    matchLabels:
+      app: non-compliant-example
+  template:
+    metadata:
+      labels:
+        app: non-compliant-example
+    spec:
+      containers:
+        - name: api
+          image: nginx:latest   # Would also violate ecr-only-images Kyverno policy
+          ports:
+            - containerPort: 80
+          resources:
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+          # livenessProbe missing  # VIOLATION: all containers need liveness probe

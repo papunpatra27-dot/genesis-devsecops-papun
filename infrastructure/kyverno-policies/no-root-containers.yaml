@@ -1,0 +1,52 @@
+##############################################################################
+# Policy 1 — no-root-containers
+# All containers must set securityContext.runAsNonRoot: true.
+# Mode: Enforce — non-compliant pods are rejected at admission.
+##############################################################################
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: no-root-containers
+  annotations:
+    policies.kyverno.io/title: No Root Containers
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Containers running as root have full access to the host if they escape
+      the container namespace. This policy enforces runAsNonRoot: true on
+      every container and init-container in every Pod.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-containers-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: "All containers must set securityContext.runAsNonRoot: true."
+        pattern:
+          spec:
+            containers:
+              - securityContext:
+                  runAsNonRoot: true
+    - name: check-init-containers-run-as-non-root
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.initContainers[] | length(@) }}"
+            operator: GreaterThanOrEquals
+            value: 1
+      validate:
+        message: "All init-containers must set securityContext.runAsNonRoot: true."
+        pattern:
+          spec:
+            initContainers:
+              - securityContext:
+                  runAsNonRoot: true

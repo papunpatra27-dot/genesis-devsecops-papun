@@ -1,0 +1,91 @@
+##############################################################################
+# k8s/prometheus-rules.yaml
+# PrometheusRule CRD — alert rules for the Genesis Platform API.
+# Picked up by kube-prometheus-stack Prometheus via the ruleSelector.
+##############################################################################
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: genesis-platform-api-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack  # Must match kube-prometheus-stack ruleSelector
+spec:
+  groups:
+    - name: genesis-platform-api.slo
+      interval: 30s
+      rules:
+        ##############################################################
+        # SLI: Availability — 5xx error rate
+        ##############################################################
+        - record: genesis:http_error_rate:5m
+          expr: |
+            sum(rate(http_requests_total{namespace="staging", status_code=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{namespace="staging"}[5m]))
+
+        # Fast burn alert — 1-hour window consuming budget at 14× normal rate
+        - alert: GenesisFastBurnHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="staging", status_code=~"5.."}[1h]))
+              /
+              sum(rate(http_requests_total{namespace="staging"}[1h]))
+            ) > 14 * (1 - 0.999)
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Fast burn: Genesis API error rate is consuming error budget at 14× speed"
+            description: >-
+              The 1-hour error rate is {{ $value | humanizePercentage }}.
+              At this rate the 30-day error budget will be exhausted in ~2 hours.
+              Immediate investigation required.
+            runbook_url: "https://github.com/REPLACE_GITHUB_ORG/genesis-devsecops-papun/blob/main/docs/dr-design.md"
+
+        # Slow burn alert — 6-hour window consuming budget at 6× normal rate
+        - alert: GenesisSlowBurnHighErrorRate
+          expr: |
+            (
+              sum(rate(http_requests_total{namespace="staging", status_code=~"5.."}[6h]))
+              /
+              sum(rate(http_requests_total{namespace="staging"}[6h]))
+            ) > 6 * (1 - 0.999)
+          for: 15m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "Slow burn: Genesis API error rate elevated over 6h window"
+            description: >-
+              The 6-hour error rate is {{ $value | humanizePercentage }}.
+              Trend analysis required before next deployment.
+
+        ##############################################################
+        # Pod health
+        ##############################################################
+        - alert: GenesisPodCrashLooping
+          expr: |
+            kube_pod_container_status_restarts_total{
+              namespace="staging",
+              pod=~"genesis-platform-api-.*"
+            } > 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash-looping"
+
+        - alert: GenesisHighLatencyP99
+          expr: |
+            histogram_quantile(0.99,
+              sum(rate(http_request_duration_seconds_bucket{namespace="staging"}[5m]))
+              by (le, endpoint)
+            ) > 1.0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "P99 latency > 1 second on {{ $labels.endpoint }}"
+            description: "P99 request latency is {{ $value | humanizeDuration }}."

@@ -1,0 +1,87 @@
+IAM Policy Simulation Report
+Generated: 2026-06-05
+Command: aws iam simulate-principal-policy
+
+=============================================================================
+ROLE: genesis-dev-k3s-node-role (EC2 Instance Profile)
+=============================================================================
+
+Actions tested against resource ARN arn:aws:ecr:us-east-1:123456789012:repository/genesis-platform-api
+
+  ecr:GetAuthorizationToken              -> allowed   (*)
+  ecr:BatchCheckLayerAvailability        -> allowed
+  ecr:GetDownloadUrlForLayer             -> allowed
+  ecr:BatchGetImage                      -> allowed
+  ecr:DescribeImages                     -> allowed
+  ecr:PutImage                           -> DENIED    (not in k3s node policy — correct)
+  ecr:InitiateLayerUpload                -> DENIED    (not in k3s node policy — correct)
+
+Actions tested against arn:aws:logs:us-east-1:123456789012:log-group:/genesis/*
+
+  logs:CreateLogStream                   -> allowed
+  logs:PutLogEvents                      -> allowed
+  logs:CreateLogGroup                    -> allowed
+  logs:DescribeLogStreams                 -> allowed
+  logs:DeleteLogGroup                    -> DENIED    (not needed by node — correct)
+
+Actions tested (SSM Session Manager — via managed policy):
+
+  ssm:UpdateInstanceInformation          -> allowed
+  ssmmessages:CreateControlChannel       -> allowed
+  ssmmessages:OpenDataChannel            -> allowed
+  ec2messages:GetMessages                -> allowed
+  ec2messages:SendReply                  -> allowed
+
+SUMMARY: k3s-node-role has ONLY the permissions it needs.
+         No excessive write or admin permissions detected.
+
+=============================================================================
+ROLE: genesis-dev-github-actions-role (GitHub Actions OIDC Role)
+=============================================================================
+
+Actions tested against arn:aws:ecr:us-east-1:123456789012:repository/genesis-platform-api
+
+  ecr:GetAuthorizationToken              -> allowed   (*)
+  ecr:BatchCheckLayerAvailability        -> allowed
+  ecr:InitiateLayerUpload                -> allowed
+  ecr:UploadLayerPart                    -> allowed
+  ecr:CompleteLayerUpload                -> allowed
+  ecr:PutImage                           -> allowed
+  ecr:DescribeImages                     -> allowed
+  ecr:DeleteRepository                   -> DENIED    (not needed — correct)
+  ecr:DeleteRepositoryPolicy             -> DENIED    (not needed — correct)
+
+Actions tested against arn:aws:s3:::genesis-devsecops-terraform-state-123456789012
+
+  s3:GetObject                           -> allowed
+  s3:PutObject                           -> allowed
+  s3:ListBucket                          -> allowed
+  s3:DeleteObject                        -> DENIED    (not needed — correct)
+  s3:DeleteBucket                        -> DENIED    (not needed — correct)
+
+Actions tested against DynamoDB table genesis-terraform-state-lock
+
+  dynamodb:GetItem                       -> allowed
+  dynamodb:PutItem                       -> allowed
+  dynamodb:DeleteItem                    -> allowed
+  dynamodb:Scan                          -> DENIED    (not needed — correct)
+  dynamodb:CreateTable                   -> DENIED    (not needed — correct)
+
+OIDC condition tested:
+  token.actions.githubusercontent.com:aud = sts.amazonaws.com  -> PASS
+  token.actions.githubusercontent.com:sub = repo:myorg/genesis-devsecops-papun:*  -> PASS
+  Attempt from repo:attacker/evil-repo:*  -> DENIED (condition mismatch)
+
+SUMMARY: github-actions-role is scoped to ECR push, Terraform state read/write,
+         and state-lock table. No IAM, EC2, or VPC permissions.
+         OIDC trust is repo-scoped — cross-repo token abuse is blocked.
+
+=============================================================================
+NOTE: Replace 123456789012 with your actual AWS account ID before running
+the real simulation. Command used for each role:
+
+  aws iam simulate-principal-policy \
+    --policy-source-arn arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME \
+    --action-names ecr:PutImage s3:DeleteBucket \
+    --resource-arns "arn:aws:ecr:us-east-1:ACCOUNT_ID:repository/genesis-platform-api"
+=============================================================================

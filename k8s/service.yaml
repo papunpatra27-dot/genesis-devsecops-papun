@@ -1,0 +1,99 @@
+##############################################################################
+# k8s/service.yaml
+# Two Services: stable (production traffic) and canary (canary traffic).
+# Argo Rollouts adjusts the pod selector on these services during rollouts.
+##############################################################################
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app: genesis-platform-api
+
+---
+# Stable service — always points to the stable (current production) pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: genesis-platform-api-stable
+  namespace: staging
+  labels:
+    app: genesis-platform-api
+    role: stable
+spec:
+  selector:
+    app: genesis-platform-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+
+---
+# Canary service — Argo Rollouts routes canary percentage here during rollout
+apiVersion: v1
+kind: Service
+metadata:
+  name: genesis-platform-api-canary
+  namespace: staging
+  labels:
+    app: genesis-platform-api
+    role: canary
+spec:
+  selector:
+    app: genesis-platform-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+      protocol: TCP
+  type: ClusterIP
+
+---
+# Main service — used by Prometheus ServiceMonitor for scraping
+apiVersion: v1
+kind: Service
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app: genesis-platform-api
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: genesis-platform-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+    - name: metrics
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+---
+# ServiceMonitor — tells Prometheus to scrape the application
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: genesis-platform-api
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - staging
+  selector:
+    matchLabels:
+      app: genesis-platform-api
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s

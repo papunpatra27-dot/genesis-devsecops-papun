@@ -1,0 +1,74 @@
+##############################################################################
+# k8s/analysis-template.yaml
+# AnalysisTemplate for the canary gate.
+#
+# Queries Prometheus for the HTTP error rate on canary pods over a 2-minute
+# window. The same PromQL expression is referenced in the SLO definition
+# (slo/genesis-platform-api-slo.yaml) — canary gate and SLO share one
+# measurement definition.
+#
+# Success condition: error rate must be <= 0.02 (2%) for the analysis to PASS.
+# Failure condition: error rate > 0.02 (2%) aborts and rolls back.
+#
+# The PromQL query filters by the 'canary' pod-template-hash label injected
+# by Argo Rollouts so only canary pod traffic is measured.
+##############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: genesis-api-error-rate
+  namespace: staging
+spec:
+  args:
+    - name: service-name
+
+  metrics:
+    - name: error-rate
+      # Poll every 30 seconds, require at least 3 successful measurements
+      interval: 30s
+      count: 4
+      failureLimit: 1   # Allow 1 measurement failure before aborting
+
+      # Success condition: error rate <= 2%
+      successCondition: result[0] <= 0.02
+      # Failure condition: error rate > 2%
+      failureCondition: result[0] > 0.02
+
+      provider:
+        prometheus:
+          address: http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090
+
+          # PromQL: 5xx error rate on canary pods over a 2-minute window.
+          # This is the exact expression referenced in the SLO YAML.
+          #
+          # http_requests_total is emitted by the FastAPI app's metrics middleware
+          # with labels: method, endpoint, status_code.
+          #
+          # The 'pod' label set contains 'canary' in the hash when Argo Rollouts
+          # injects the canary pod-template-hash.
+          query: |
+            (
+              sum(
+                rate(
+                  http_requests_total{
+                    namespace="staging",
+                    service="{{args.service-name}}",
+                    status_code=~"5.."
+                  }[2m]
+                )
+              )
+              /
+              sum(
+                rate(
+                  http_requests_total{
+                    namespace="staging",
+                    service="{{args.service-name}}"
+                  }[2m]
+                )
+              )
+            ) or vector(0)
+            # 'or vector(0)' ensures that when the canary service has
+            # received zero traffic (normal at canary start), the query
+            # returns 0 (no errors) rather than empty series.
+            # Without this guard, an empty result makes the AnalysisRun
+            # report 'no measurement data' and causes an incorrect abort.

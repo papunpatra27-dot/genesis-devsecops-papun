@@ -1,0 +1,68 @@
+##############################################################################
+# k8s/ingress.yaml
+#
+# NGINX Ingress for the genesis-platform-api.
+# Works alongside rollout.yaml (Argo Rollouts uses this Ingress for canary
+# traffic splitting — patches it to route % to canary service).
+#
+# k3s ships with Traefik by default. To use NGINX instead, install via Helm:
+#   helm upgrade --install ingress-nginx ingress-nginx \
+#     --repo https://kubernetes.github.io/ingress-nginx \
+#     --namespace ingress-nginx --create-namespace
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    # Argo Rollouts patches these annotations for canary weight management
+    nginx.ingress.kubernetes.io/canary: "false"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "30"
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: genesis-platform-api-stable   # stable Service (rollout.yaml)
+                port:
+                  number: 80
+---
+##############################################################################
+# Canary Ingress (managed/patched by Argo Rollouts during rollout)
+# Do NOT edit this manually — Argo Rollouts controller owns it during deploys.
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: genesis-platform-api-canary
+  namespace: staging
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "0"   # Argo sets this to 10, 25, 50
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: genesis-platform-api-canary   # canary Service (rollout.yaml)
+                port:
+                  number: 80

@@ -1,0 +1,420 @@
+##############################################################################
+# .github/workflows/deploy.yml
+#
+# Deploy pipeline — triggers on push to main (stages 12-13) AND manual dispatch.
+# Implements Stages 12-13 (GitOps sync + canary smoke test).
+#
+# GITOPS FLOW (how Argo CD learns about the new image):
+#   1. build-and-push   → build image, push to ECR with git-SHA tag (IMMUTABLE)
+#   2. sign-image       → Cosign keyless signs the ECR image
+#   3. update-manifest  → Python replaces image tag in k8s/rollout.yaml
+#                       → git commit + push back to main
+#   4. argocd-sync      → Argo CD detects new commit (poll/webhook)
+#                       → applies updated rollout.yaml to cluster
+#                       → Argo Rollouts starts canary: 10%→analysis→25%→50%→100%
+#   5. smoke-test       → curl GET /health, assert 200 + namespace=staging
+#
+# INFINITE-LOOP PREVENTION:
+#   The update-manifest job pushes to main (updating k8s/rollout.yaml).
+#   paths-ignore ensures that push does NOT re-trigger this workflow.
+#
+# OIDC AUTHENTICATION:
+#   All AWS access uses aws-actions/configure-aws-credentials with role-to-assume.
+#   No static credentials. AWS_ACCESS_KEY_ID does not appear anywhere.
+##############################################################################
+name: Deploy to Staging
+
+on:
+  # AUTO: trigger on push to main for app/infrastructure changes.
+  # paths-ignore prevents the rollout.yaml update commit from re-triggering.
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'k8s/rollout.yaml'       # Updated by this workflow — must not loop
+      - 'setup_guide.md'
+      - 'docs/**'
+      - 'reports/**'
+      - 'ai-usage-log.md'
+      - 'README.md'
+
+  # MANUAL: run from GitHub → Actions → Deploy to Staging → Run workflow
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for this deploy'
+        required: true
+        default: 'Manual deploy'
+
+permissions:
+  contents: write    # Required to commit updated image tag back to Git
+  security-events: write
+  actions: read
+  id-token: write    # OIDC for AWS (ECR push) and Cosign (keyless signing)
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: genesis-platform-api
+
+jobs:
+  ##############################################################################
+  # Re-run security gates (Stages 1-4) on every push to main.
+  # Deploy does not proceed if any security gate fails.
+  ##############################################################################
+  security-gates:
+    name: "Stages 1-4 — Security Gates (re-verified on main)"
+    uses: ./.github/workflows/security-scan.yml
+    with:
+      python-version: "3.12"
+    secrets: inherit
+
+  ##############################################################################
+  # Build image + push to ECR with IMMUTABLE git-SHA tag
+  # Stage 5 (deploy variant) — push to ECR
+  # Stage 8 — Cosign keyless signing
+  ##############################################################################
+  build-sign-push:
+    name: "Stage 5+8 — Build, Push & Sign"
+    runs-on: ubuntu-latest
+    needs: [security-gates]
+    # ── MANUAL APPROVAL GATE ──────────────────────────────────────────────────
+    # GitHub pauses here and waits for a required reviewer to approve.
+    # Configure reviewers: repo → Settings → Environments → staging → Required reviewers.
+    # Nothing below this job (ECR push, Cosign sign, Argo CD sync, smoke test) runs
+    # until a human clicks Approve in the GitHub Actions UI.
+    environment:
+      name: staging
+    outputs:
+      sha-tag: ${{ steps.meta.outputs.sha-tag }}
+      image-uri: ${{ steps.push.outputs.image-uri }}
+      ecr-registry: ${{ steps.ecr-login.outputs.registry }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute git-SHA image tag
+        id: meta
+        run: |
+          SHA_TAG="sha-$(git rev-parse --short HEAD)"
+          echo "sha-tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Deploying image tag: ${SHA_TAG}"
+
+      - name: Configure AWS credentials (OIDC — no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          # ↑ OIDC federated auth. AWS_ACCESS_KEY_ID is never used.
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push to ECR (IMMUTABLE SHA tag)
+        id: push
+        run: |
+          SHA_TAG="${{ steps.meta.outputs.sha-tag }}"
+          ECR_URI="${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}"
+          IMAGE_URI="${ECR_URI}:${SHA_TAG}"
+
+          # Build multi-stage image
+          docker buildx build \
+            --platform linux/amd64 \
+            --file app/Dockerfile \
+            --tag "${IMAGE_URI}" \
+            --push \
+            --cache-from "type=registry,ref=${ECR_URI}:cache" \
+            --cache-to   "type=registry,ref=${ECR_URI}:cache,mode=max" \
+            app/
+
+          echo "image-uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "Pushed: ${IMAGE_URI}"
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image with Cosign (keyless OIDC — stored in ECR)
+        run: |
+          cosign sign --yes "${{ steps.push.outputs.image-uri }}"
+          echo "✅ Image signed. Signature stored in ECR alongside digest."
+
+  ##############################################################################
+  # Trivy + SBOM on the PUSHED ECR image (post-push verification)
+  ##############################################################################
+  post-push-scan:
+    name: "Stage 6+7 — Trivy + SBOM (post-push)"
+    runs-on: ubuntu-latest
+    needs: [build-sign-push]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Trivy scan ECR image (block on CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ needs.build-sign-push.outputs.image-uri }}
+          format: json
+          output: reports/trivy-ecr-report.json
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true
+
+      - name: Generate SBOM from ECR image
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ needs.build-sign-push.outputs.image-uri }}
+          format: cyclonedx-json
+          output-file: "reports/sbom-ecr-${{ needs.build-sign-push.outputs.sha-tag }}.cdx.json"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deploy-scan-artifacts
+          path: reports/
+
+  ##############################################################################
+  # GitOps Trigger — update image tag in rollout.yaml and commit back to Git.
+  # Argo CD watches the main branch. When it sees this commit, it syncs
+  # the new rollout.yaml to the cluster, triggering the canary rollout.
+  ##############################################################################
+  update-manifest:
+    name: "GitOps — Update image tag in rollout.yaml"
+    runs-on: ubuntu-latest
+    needs: [build-sign-push, post-push-scan]
+    outputs:
+      git-sha: ${{ steps.commit.outputs.git-sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Update image tag in k8s/rollout.yaml
+        run: |
+          SHA_TAG="${{ needs.build-sign-push.outputs.sha-tag }}"
+          ECR_REGISTRY="${{ needs.build-sign-push.outputs.ecr-registry }}"
+          NEW_IMAGE="${ECR_REGISTRY}/${{ env.ECR_REPOSITORY }}:${SHA_TAG}"
+
+          echo "Updating rollout.yaml image to: ${NEW_IMAGE}"
+
+          # Use Python for reliable in-place YAML image tag replacement
+          python3 - <<PYEOF
+          import re, pathlib
+
+          path = pathlib.Path("k8s/rollout.yaml")
+          content = path.read_text()
+
+          # Replace the image line that references our ECR repo
+          # Matches any tag: sha-xxxx, REPLACE_GIT_SHA, or previous SHA
+          pattern = r"(image:\s+)[^\s]*genesis-platform-api:[^\s]+"
+          replacement = r"\g<1>${NEW_IMAGE}"
+
+          # Expand the shell variable into the Python string
+          new_image = "${NEW_IMAGE}"
+          updated = re.sub(
+              r"(image:\s+)[^\s]*genesis-platform-api:[^\s]+",
+              lambda m: m.group(1) + new_image,
+              content
+          )
+          path.write_text(updated)
+          print(f"Updated rollout.yaml → {new_image}")
+          PYEOF
+
+          # Verify the update
+          grep "image:" k8s/rollout.yaml | head -3
+
+      - name: Commit and push updated manifest
+        id: commit
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add k8s/rollout.yaml
+
+          if git diff --staged --quiet; then
+            echo "No changes to rollout.yaml (same SHA already deployed)"
+            COMMIT_SHA=$(git rev-parse HEAD)
+          else
+            git commit -m "chore(deploy): update image to ${{ needs.build-sign-push.outputs.sha-tag }}
+
+Automated update by GitHub Actions deploy workflow.
+Image: ${{ needs.build-sign-push.outputs.image-uri }}
+Trigger: ${{ github.sha }}"
+
+            git push origin main
+            COMMIT_SHA=$(git rev-parse HEAD)
+            echo "Committed new image tag — Argo CD will detect this commit and sync."
+          fi
+
+          echo "git-sha=${COMMIT_SHA}" >> "$GITHUB_OUTPUT"
+
+  ##############################################################################
+  # Stage 12 — Argo CD GitOps Sync
+  # Gate: YES — Argo CD must reach Synced + Healthy before smoke test.
+  #
+  # How this works:
+  #   - The previous job committed new rollout.yaml to main.
+  #   - Argo CD polls Git every 3 minutes (or is notified by webhook).
+  #   - When it detects the commit, it applies the diff to the cluster.
+  #   - Argo Rollouts controller starts the canary: 10% → analysis → 25% → 50%
+  #   - We wait here until Argo CD reports the app as Synced + Healthy.
+  ##############################################################################
+  argocd-sync:
+    name: "Stage 12 — Argo CD GitOps Sync"
+    runs-on: ubuntu-latest
+    needs: [update-manifest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Argo CD CLI
+        run: |
+          curl -sSL \
+            "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64" \
+            -o /usr/local/bin/argocd
+          chmod +x /usr/local/bin/argocd
+          argocd version --client
+
+      - name: Login to Argo CD
+        run: |
+          argocd login "${{ secrets.ARGOCD_SERVER }}" \
+            --username admin \
+            --password "${{ secrets.ARGOCD_PASSWORD }}" \
+            --insecure \
+            --grpc-web
+
+      - name: Trigger Argo CD refresh (force poll instead of waiting 3 min)
+        run: |
+          argocd app get genesis-platform-api --refresh
+
+      - name: Wait for Argo CD sync (Synced + Healthy)
+        run: |
+          echo "Waiting for Argo CD to sync the new rollout manifest..."
+          argocd app wait genesis-platform-api \
+            --sync \
+            --health \
+            --timeout 300
+
+      - name: Show final Argo CD application status
+        run: |
+          argocd app get genesis-platform-api
+          argocd app history genesis-platform-api --max 3
+
+      - name: Show Argo Rollouts canary status
+        run: |
+          # Install kubectl for rollout status check
+          curl -LO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl
+
+          # Configure kubeconfig via SSH tunnel or bastion (adjust for your setup)
+          # In this architecture, the k3s API is exposed on port 6443 of the EC2 EIP
+          mkdir -p ~/.kube
+          echo "${{ secrets.K3S_KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+          echo "=== Argo Rollouts canary status ==="
+          kubectl argo rollouts get rollout genesis-platform-api \
+            -n staging 2>/dev/null || echo "(argo-rollouts plugin not installed on runner)"
+
+  ##############################################################################
+  # Stage 13 — Canary Smoke Test
+  # Gate: YES — GET /health must return 200 with namespace=staging.
+  ##############################################################################
+  smoke-test:
+    name: "Stage 13 — Canary Smoke Test"
+    runs-on: ubuntu-latest
+    needs: [argocd-sync]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: pip install requests
+
+      - name: Wait for canary pods to be ready (10% traffic window)
+        run: sleep 30
+
+      - name: Run smoke test — GET /health (Stage 13 gate)
+        env:
+          STAGING_URL: "http://${{ secrets.K3S_PUBLIC_IP }}"
+        run: |
+          python3 - <<'PYEOF'
+          import sys
+          import time
+          import requests
+
+          base_url = "${{ env.STAGING_URL }}"
+          max_retries = 5
+          retry_delay = 10
+
+          print(f"Smoke test target: {base_url}/health")
+
+          for attempt in range(1, max_retries + 1):
+              try:
+                  resp = requests.get(f"{base_url}/health", timeout=10)
+                  print(f"Attempt {attempt}: HTTP {resp.status_code}")
+
+                  assert resp.status_code == 200, \
+                      f"Expected HTTP 200, got {resp.status_code}\nBody: {resp.text}"
+
+                  body = resp.json()
+                  assert body.get("status") == "ok", \
+                      f"Expected status='ok', got: {body}"
+                  assert body.get("namespace") == "staging", \
+                      f"Expected namespace='staging', got: {body.get('namespace')}\n" \
+                      f"K8S_NAMESPACE env var may not be injected — check rollout.yaml env block"
+
+                  print(f"✅ Stage 13 PASSED:")
+                  print(f"   status    = {body['status']}")
+                  print(f"   version   = {body['version']}")
+                  print(f"   namespace = {body['namespace']}")
+                  sys.exit(0)
+
+              except (requests.RequestException, AssertionError) as exc:
+                  print(f"Attempt {attempt} FAILED: {exc}")
+                  if attempt < max_retries:
+                      print(f"Retrying in {retry_delay}s...")
+                      time.sleep(retry_delay)
+                  else:
+                      print("❌ Smoke test FAILED after all retries")
+                      sys.exit(1)
+          PYEOF
+
+      - name: Verify Argo CD sync is still Healthy after smoke test
+        run: |
+          curl -sSL \
+            "https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64" \
+            -o /usr/local/bin/argocd && chmod +x /usr/local/bin/argocd
+
+          argocd login "${{ secrets.ARGOCD_SERVER }}" \
+            --username admin \
+            --password "${{ secrets.ARGOCD_PASSWORD }}" \
+            --insecure --grpc-web
+
+          STATUS=$(argocd app get genesis-platform-api -o json \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); \
+              print(d['status']['health']['status'])")
+
+          echo "Argo CD health status: ${STATUS}"
+          [ "${STATUS}" = "Healthy" ] \
+            && echo "✅ Deploy complete — canary rollout in progress" \
+            || (echo "❌ App not Healthy: ${STATUS}" && exit 1)

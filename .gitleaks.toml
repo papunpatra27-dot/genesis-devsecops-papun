@@ -1,0 +1,45 @@
+# Gitleaks configuration — controls what is scanned and what is allowed.
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+
+[extend]
+# Extend the default gitleaks ruleset
+useDefault = true
+
+##############################################################################
+# Allowlist: paths or commits where detected secrets are intentional demo data
+##############################################################################
+[allowlist]
+description = "Intentional demo flaws — not real credentials"
+paths = [
+  # Flaw 1 demo file: contains documentation-example AWS keys for Stage 1 demo
+  # This allowlist entry is DISABLED by default (commented out).
+  # To allow the flaw on main branch (after demo), uncomment this line:
+  # '''app/flaws/flaw1_secret.txt''',
+
+  # Exclude test fixtures and documentation that contain example values
+  '''reports/''',
+  '''docs/''',
+]
+
+commits = [
+  # Add specific commit SHAs here to allowlist individual commits
+  # Example: "abc123def456"
+]
+
+##############################################################################
+# Custom rules (extend default ruleset)
+##############################################################################
+
+# Detect any terraform.tfvars containing suspicious values
+# (catches developers pasting real account IDs or keys into tfvars)
+[[rules]]
+id = "terraform-tfvars-secret"
+description = "Potential secret in terraform.tfvars"
+regex = '''(?i)(password|secret|key|token)\s*=\s*["']?[A-Za-z0-9/+]{16,}["']?'''
+path = '''terraform\.tfvars'''
+severity = "HIGH"
+[rules.allowlist]
+regexes = [
+  # Allow placeholder values used in this repo's tfvars
+  '''REPLACE_''',
+]

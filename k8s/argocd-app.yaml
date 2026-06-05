@@ -1,0 +1,87 @@
+##############################################################################
+# k8s/argocd-app.yaml
+#
+# Argo CD Application CRD — defines WHAT Argo CD watches and WHERE it deploys.
+#
+# This is the "bridge" between Git and the Kubernetes cluster.
+# When any file under `spec.source.path` (k8s/) changes on the `main` branch,
+# Argo CD detects it (poll every 3 min or via webhook) and applies the diff.
+#
+# This file is the GitOps trigger for the canary deployment flow:
+#   1. deploy.yml commits updated k8s/rollout.yaml (new image SHA tag)
+#   2. Argo CD detects the commit to main
+#   3. Argo CD applies updated rollout.yaml to the staging namespace
+#   4. Argo Rollouts controller takes over: runs 10%→analysis→25%→50%→100%
+#
+# Installation:
+#   kubectl apply -f k8s/argocd-app.yaml
+#   (run after Argo CD is installed; or the userdata.sh.tpl does this on boot)
+#
+# Required secrets in the cluster (for private repo access):
+#   kubectl create secret generic repo-creds \
+#     --from-literal=username=<github-user> \
+#     --from-literal=password=<github-pat> \
+#     -n argocd
+##############################################################################
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: genesis-platform-api
+  namespace: argocd
+  # Deletion finalizer: when this Application is deleted, Argo CD will also
+  # delete all managed resources from the cluster (cascade delete).
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+    environment: staging
+spec:
+  project: default
+
+  source:
+    # Replace with your actual GitHub repo URL
+    repoURL: https://github.com/REPLACE_GITHUB_ORG/genesis-devsecops-papun.git
+    targetRevision: main    # Track the main branch; each commit triggers a sync
+    path: k8s               # Only manifests under k8s/ are applied
+    # Exclude flawed-deployment.yaml (it's for CI gate demos, not for the cluster)
+    directory:
+      exclude: "flawed-deployment.yaml"
+      recurse: false
+
+  destination:
+    server: https://kubernetes.default.svc   # In-cluster Argo CD (k3s self)
+    namespace: staging
+
+  syncPolicy:
+    automated:
+      prune: true       # Delete resources removed from Git
+      selfHeal: true    # Revert manual cluster edits back to Git state
+
+    syncOptions:
+      - CreateNamespace=true      # Create staging namespace if it doesn't exist
+      - ServerSideApply=true      # Use SSA for CRD-heavy resources (Rollout, PrometheusRule)
+      - RespectIgnoreDifferences=true
+
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  # Ignore differences that are managed by other controllers
+  ignoreDifferences:
+    - group: argoproj.io
+      kind: Rollout
+      jsonPointers:
+        - /spec/template/spec/containers/0/image   # Updated by deploy.yml via git commit
+
+  # Inform Argo CD about health checks for Argo Rollouts resources
+  info:
+    - name: "Canary strategy"
+      value: "10%→AnalysisRun→25%→50%→100%"
+    - name: "SLO target"
+      value: "99.9% (43.8 min error budget / 30 days)"
+    - name: "Runbook"
+      value: "https://github.com/REPLACE_GITHUB_ORG/genesis-devsecops-papun/blob/main/docs/dr-design.md"
