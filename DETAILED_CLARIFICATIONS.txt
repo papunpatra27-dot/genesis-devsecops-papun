@@ -1,0 +1,745 @@
+================================================================================
+              DETAILED CLARIFICATIONS - STEP BY STEP WITH EXAMPLES
+================================================================================
+
+
+================================================================================
+CLARIFICATION 1: WHY Helm charts NOT used for k8s/ YAML files?
+================================================================================
+
+THE QUESTION:
+  "So yes, Helm charts ARE used for Argo CD, Argo Rollouts, etc.
+   But NOT for your application (k8s/ YAML files). WHY???"
+
+THE ANSWER:
+
+Helm charts are for INSTALLING software that comes with many config options.
+Plain YAML is for DEFINING your application resources.
+
+HELM CHART = Software package with installer
+  Argo CD = Complex software with 100+ config options
+  Prometheus = Complex software with many collectors, storage options
+  Problem: How do you install these with all the right options?
+  Solution: Helm chart packages it with sensible defaults + ability to customize
+
+Example (Argo CD via Helm):
+  helm install argocd argo/argo-cd \
+    --namespace argocd \
+    --set server.service.type=NodePort \
+    --set server.replicas=1
+
+  Helm chart has:
+    • Templates for all k8s resources (Deployment, Service, ConfigMap, etc)
+    • Ability to override values (--set flags)
+    • Handles dependencies (e.g., redis, postgresql required by Argo CD)
+    • Manages upgrades
+
+
+PLAIN YAML = Your application definition
+  Your app: genesis-platform-api
+  Problem: You want specific resources (Namespace, Service, Rollout)
+           You want them deployed together
+           You want them updated via Git
+  Solution: Write plain YAML files, commit to Git, Argo CD auto-syncs
+
+Example (Your app via plain YAML):
+  k8s/namespace.yaml:
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: staging
+
+  k8s/service.yaml:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: genesis-platform-api-stable
+      namespace: staging
+    spec:
+      ports:
+        - port: 80
+          targetPort: 8000
+
+  k8s/rollout.yaml:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
+    metadata:
+      name: genesis-platform-api
+      namespace: staging
+    spec:
+      replicas: 3
+
+WHEN WOULD YOU USE HELM FOR YOUR APP?
+  Only if:
+  • Your app has 100+ different deployment scenarios
+  • You want to sell it as a product
+  • You want flexibility for many customers
+
+  For a simple API? NO.
+  Plain YAML + Git = simpler, more transparent
+
+
+WHY ARGO CD MANAGES PLAIN YAML BUT NOT HELM?
+  Actually, Argo CD CAN manage both!
+  
+  For Helm charts installed via UserData:
+    helm install argocd ... (UserData script handles it)
+    Argo CD doesn't need to manage it (it's installed, not changing)
+  
+  For your app YAML:
+    kubectl apply -f k8s/ (Argo CD handles it)
+    Git is the source of truth (if code changes, Argo CD syncs)
+
+
+COMPARISON TABLE:
+
+  Helm Charts (3rd-party tools):
+    ✓ Complex software (Argo CD, Prometheus)
+    ✓ Many config options
+    ✓ Installed via UserData script
+    ✓ Installed ONCE, runs forever
+    ✓ Managed by Helm (not Argo CD)
+  
+  Plain YAML (your app):
+    ✓ Simple resources (Namespace, Service, Rollout)
+    ✓ Clear definition
+    ✓ Stored in Git
+    ✓ Updated on every commit
+    ✓ Managed by Argo CD (GitOps)
+
+
+================================================================================
+CLARIFICATION 2: WHY MANUAL CONFIGURATION OF ARGO CD?
+================================================================================
+
+THE QUESTION:
+  "MANUAL (You configure Argo CD): why manual??
+   ✓ SSH into EC2
+   ✓ Get Argo CD password? how? from where?
+   ✓ Login to Argo CD Web UI
+   ✓ Add GitHub repository credentials , what do u mean? how??
+   ✓ Tell Argo CD: 'Watch GitHub, apply k8s/ files' what do u mean? how??"
+
+THE ANSWER:
+
+WHEN USERDATA SCRIPT RUNS:
+
+EC2 boots → UserData runs:
+  helm install argocd argo/argo-cd --namespace argocd
+
+What Helm does:
+  1. Creates Kubernetes Namespace: argocd
+  2. Creates Argo CD Deployment
+  3. Creates Argo CD Service
+  4. Generates INITIAL admin password (random, only readable from k8s secret)
+  5. Starts Argo CD server on port 30950 (NodePort)
+
+Result AFTER helm install:
+  ✓ Argo CD is RUNNING
+  ✓ Argo CD Web UI is ACCESSIBLE at: https://<EC2-IP>:30950
+  ✓ Argo CD has NO repositories configured (doesn't know about GitHub)
+  ✓ Argo CD is IDLE (nothing to deploy yet)
+
+
+STEP 1: GET ARGO CD PASSWORD
+
+Where does the password come from?
+  Helm auto-generates a random password and stores it in:
+  
+  Kubernetes Secret object:
+    Name: argocd-initial-admin-secret
+    Namespace: argocd
+    Data: password (base64 encoded)
+
+How to retrieve:
+  $ kubectl -n argocd get secret argocd-initial-admin-secret
+  NAME                          TYPE     DATA   AGE
+  argocd-initial-admin-secret   Opaque   1      3m
+  
+  $ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+  $ # Output: RandomPasswordString123456
+
+Concrete example:
+  $ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+  $ # Output: Hw7$mK9!pQ@wL#xR
+
+WHERE is this secret stored?
+  Inside k3s cluster (etcd database)
+  
+HOW TO ACCESS IT:
+  You must have:
+  1. SSH access to EC2 (using EC2 key pair)
+  2. Kubeconfig file (to run kubectl commands)
+  
+  Commands:
+    $ ssh -i ~/.ssh/genesis-k3s ec2-user@<EC2-IP>
+    $ sudo cat /etc/rancher/k3s/k3s.yaml
+    $ # Copy kubeconfig, add to ~/.kube/config
+    $ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+
+
+STEP 2: LOGIN TO ARGO CD WEB UI
+
+Where?
+  https://<EC2-Elastic-IP>:30950
+  
+Example:
+  https://13.201.123.45:30950
+
+Who exposes this port?
+  The helm install created:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: argocd-server
+      namespace: argocd
+    spec:
+      type: NodePort
+      ports:
+        - port: 443
+          targetPort: 8080
+          nodePort: 30950
+
+  NodePort = exposes k3s service on EC2 public interface
+  Port 30950 = randomly assigned (or specified via --set)
+
+Helm chart (userdata.sh.tpl) set it:
+  helm install argocd argo/argo-cd \
+    --set server.service.type=NodePort \
+    --wait
+
+What does this mean?
+  • server.service.type = Use NodePort (expose to internet)
+  • NodePort = Use any available port 30000-32767
+  • Helm assigned: 30950
+
+
+HOW TO ACCESS:
+  1. Open browser
+  2. Go to: https://<EC2-Elastic-IP>:30950
+  3. Username: admin
+  4. Password: <from step 1>
+  5. Click Login
+
+
+STEP 3: ADD GITHUB REPOSITORY CREDENTIALS
+
+What do "repository credentials" mean?
+  Argo CD needs to:
+  1. Connect to GitHub
+  2. Read your Git repo (genesis-devsecops-papun)
+  3. Pull the k8s/ folder
+  
+  But your repo is PRIVATE (cannot read without authentication).
+  
+  Argo CD needs credentials to prove it has permission:
+    User: your-github-username
+    Password: GitHub Personal Access Token (PAT)
+
+How to get GitHub PAT?
+  1. Go to: https://github.com/settings/tokens
+  2. Click "Generate new token" → "Generate new token (classic)"
+  3. Name: "argocd-repo-access"
+  4. Scopes: Check "repo" (full control of private repositories)
+  5. Click "Generate token"
+  6. Copy the token (looks like: ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6)
+
+How to add to Argo CD Web UI?
+  In browser (logged in to Argo CD):
+    1. Click: Settings (left menu)
+    2. Click: Repositories
+    3. Click: "+ CONNECT REPO"
+    4. Choose: "VIA HTTPS"
+    5. Fill in:
+       Repository URL: https://github.com/papunpatra27-dot/genesis-devsecops-papun.git
+       Username: papunpatra27-dot (your GitHub username)
+       Password: ghp_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6 (the PAT token)
+    6. Click: "CONNECT"
+
+What happens?
+  Argo CD tests the credentials:
+    • Tries: git clone using username + PAT
+    • If successful: ✓ Connected
+    • If failed: ✗ Error message
+  
+  If connected:
+    Argo CD now has permission to read your GitHub repo
+
+
+STEP 4: TELL ARGO CD TO WATCH GITHUB (Apply argocd-app.yaml)
+
+What does "watch GitHub" mean?
+  • Poll: Every 3 minutes, fetch latest commit from GitHub
+  • Compare: What's in Git vs. what's in cluster?
+  • If different: Sync (apply changes)
+
+Who tells Argo CD to do this?
+  Argo CD Application CRD resource
+
+How?
+  Create file: k8s/argocd-app.yaml
+  Content:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Application
+    metadata:
+      name: genesis-platform-api
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/papunpatra27-dot/genesis-devsecops-papun.git
+        targetRevision: main
+        path: k8s
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: staging
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+
+What does each field mean?
+  metadata.name: genesis-platform-api
+    → Name of this Application (appears in Argo CD UI)
+  
+  source.repoURL: https://github.com/...
+    → Which Git repo to watch
+  
+  source.targetRevision: main
+    → Which branch to watch (main branch)
+  
+  source.path: k8s
+    → Which folder to deploy (k8s/ folder)
+  
+  destination.server: https://kubernetes.default.svc
+    → Which Kubernetes cluster to deploy to (current cluster)
+  
+  destination.namespace: staging
+    → Which namespace to deploy to (staging)
+  
+  syncPolicy.automated.prune: true
+    → If resource removed from Git, remove from cluster
+  
+  syncPolicy.automated.selfHeal: true
+    → If cluster state differs from Git, revert back to Git
+
+How to apply?
+  $ kubectl apply -f k8s/argocd-app.yaml
+  application.argoproj.io/genesis-platform-api created
+
+What happens?
+  1. Argo CD creates Application resource
+  2. Argo CD sees: "Watch k8s/ folder in GitHub"
+  3. Argo CD connects to GitHub (using credentials from Step 3)
+  4. Argo CD reads k8s/ folder
+  5. Argo CD applies all YAML files to cluster
+  6. Argo CD enters polling mode:
+     • Every 3 minutes: Check GitHub
+     • If changed: Auto-sync
+     • If cluster differs: Auto-heal
+
+
+STEP 5: VERIFY ARGO CD IS WATCHING
+
+In browser (logged in to Argo CD):
+  Click: Applications (left menu)
+  
+You should see:
+  Name: genesis-platform-api
+  Status: Synced
+  Health: Healthy
+  
+If Synced + Healthy:
+  ✓ Argo CD is watching GitHub
+  ✓ All k8s/ resources are deployed
+  ✓ Cluster matches Git state
+
+
+SUMMARY: WHY MANUAL?
+
+Terraform can create infrastructure (EC2, VPC, etc).
+Terraform CANNOT:
+  • SSH into EC2 and retrieve k8s secrets
+  • Store GitHub credentials securely
+  • Interact with Argo CD Web UI
+  • Create Application CRD (requires kubectl access)
+
+These require human authentication:
+  • You authenticate to EC2 (SSH key)
+  • You authenticate to GitHub (PAT)
+  • You create Application CRD via kubectl
+
+Once done (ONE TIME):
+  Everything is AUTOMATIC after that (commits → deploy)
+
+
+================================================================================
+CLARIFICATION 3: K3S POD NETWORK CIDR (10.42.0.0/16) - HOW DO YOU KNOW?
+================================================================================
+
+THE QUESTION:
+  "k3s has an internal pod network (typically 10.42.0.0/16). 
+   how do you know?"
+
+THE ANSWER:
+
+K3S DOCUMENTATION:
+  k3s upstream documentation states:
+    • Default Pod Network CIDR: 10.42.0.0/16
+    • Default Service Network CIDR: 10.43.0.0/16
+    • Default Cluster Domain: cluster.local
+
+These are HARDCODED DEFAULTS in k3s.
+
+HOW TO VERIFY:
+  After k3s is installed, run:
+    $ k3s kubectl get pods -A -o wide
+    
+    You'll see Pod IPs like:
+      • 10.42.1.5
+      • 10.42.1.6
+      • 10.42.2.3
+    
+    All start with 10.42 → confirms it's using 10.42.0.0/16 range
+
+  Or check ConfigMap:
+    $ k3s kubectl get configmap -n kube-system kubeadm-config -o yaml | grep podSubnet
+    podSubnet: 10.42.0.0/16
+
+HOW TO CHANGE IT (if needed):
+  You CAN override it during k3s installation:
+    curl -sfL https://get.k3s.io | \
+      INSTALL_K3S_EXEC="--cluster-cidr=10.100.0.0/16" sh -
+  
+  But in userdata.sh.tpl, we use default:
+    curl -sfL https://get.k3s.io | sh -
+    → Uses default 10.42.0.0/16
+
+WHY THIS RANGE?
+  RFC 1918 private IP ranges:
+    • 10.0.0.0 — 10.255.255.255
+  
+  We use:
+    • VPC: 10.0.0.0/16 (AWS)
+    • Pod network: 10.42.0.0/16 (k3s)
+    • Service network: 10.43.0.0/16 (k3s)
+  
+  All different subnets so they don't overlap
+
+
+================================================================================
+CLARIFICATION 4: WHO SETS UP NGINX INGRESS CONTROLLER? HOW? WHERE?
+================================================================================
+
+THE QUESTION:
+  "NGINX Ingress Controller (listening on port 80 of the NODE)? 
+   who setup? how ? where? how nginx and ec2 connected how ???"
+
+THE ANSWER:
+
+NGINX IS NOT INSTALLED BY USERDATA SCRIPT!
+
+Look at userdata.sh.tpl carefully:
+  ✓ Helm install argocd
+  ✓ Helm install argo-rollouts
+  ✓ Helm install kyverno
+  ✓ Helm install kube-prometheus-stack
+  ✗ NO "helm install ingress-nginx" in userdata.sh.tpl
+
+Why?
+  Because NGINX is OPTIONAL.
+  
+  k3s ships with TRAEFIK ingress controller by default.
+  But we DISABLED it in userdata.sh.tpl:
+    curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik" sh -
+    ↑ This disables Traefik
+  
+  Why disable?
+    Because we want NGINX instead (Argo Rollouts works best with NGINX)
+
+SO WHO INSTALLS NGINX?
+  YOU DO! Manually!
+  
+  Command (run on EC2 after k3s is ready):
+    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+    helm repo update
+    helm install ingress-nginx ingress-nginx/ingress-nginx \
+      --namespace ingress-nginx --create-namespace
+
+  This is ONE OF THE MANUAL STEPS.
+
+WHERE IS THIS DOCUMENTED?
+  In DEPLOYMENT_GUIDE.txt (Task 10):
+    "Install NGINX Ingress Controller (helm)
+     Commands:
+       helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+       helm repo update
+       helm install ingress-nginx ingress-nginx/ingress-nginx \
+         --namespace ingress-nginx --create-namespace"
+
+HOW DOES NGINX GET PORT 80?
+  After helm install, Helm creates:
+    apiVersion: v1
+    kind: Service
+    metadata:
+      name: ingress-nginx-controller
+      namespace: ingress-nginx
+    spec:
+      type: NodePort
+      ports:
+        - port: 80
+          targetPort: 8080
+          protocol: TCP
+        - port: 443
+          targetPort: 8443
+          protocol: TCP
+      selector:
+        app.kubernetes.io/name: ingress-nginx
+        app.kubernetes.io/instance: ingress-nginx
+        app.kubernetes.io/component: controller
+
+  NodePort spec above creates:
+    • k3s Service object (internal)
+    • Mapped to EC2 port 80 (OS level)
+    • NGINX Ingress pod listens inside k3s
+    • Traffic to EC2:80 → NGINX pod:8080
+
+  This is AUTOMATIC when you helm install.
+
+HOW ARE NGINX AND EC2 CONNECTED?
+  
+  EC2 OS:
+    Port 80 is OPEN (Security Group allows it)
+    Port 80 listening via: k3s API server
+    
+  k3s Node Networking:
+    k3s runs DIRECTLY on EC2 OS (not in VM)
+    k3s creates pod network (10.42.0.0/16)
+    k3s creates Service ClusterIP IPs (10.43.0.0/16)
+    k3s creates kube-proxy rules (iptables)
+    
+  iptables rules:
+    Traffic to EC2 port 80 → kube-proxy intercepts
+    kube-proxy finds Service ingress-nginx-controller
+    Service maps to pod (NGINX Ingress pod running in k3s)
+    Pod receives traffic
+
+DIAGRAM:
+  User browser (13.201.123.45:80)
+    ↓ EC2 Security Group allows HTTP
+  EC2 OS (port 80)
+    ↓ k3s networking (kube-proxy iptables)
+  k3s Service: ingress-nginx-controller:80
+    ↓ Service selector finds pod
+  NGINX Ingress pod (10.42.1.5:8080)
+    ↓ NGINX reads Ingress resources
+  Backend Service: genesis-platform-api-stable:80
+    ↓ Service maps to pod
+  App pod (10.42.1.6:8000)
+    ↓ FastAPI runs here
+  Response returned same path back
+
+
+HOW IS THE CONNECTION ESTABLISHED?
+  
+  Step 1: You helm install ingress-nginx
+    → Helm creates NGINX Deployment
+    → Deployment creates pod
+    → Pod starts listening on port 8080
+  
+  Step 2: Helm creates Service
+    → type: NodePort
+    → Maps port 80 (external) → port 8080 (pod internal)
+  
+  Step 3: k3s scheduling
+    → Schedules NGINX pod on the node (EC2)
+    → Pod gets IP from pod network (10.42.x.x)
+  
+  Step 4: kube-proxy creates iptables rules
+    → Traffic to EC2:80 → Service ClusterIP
+    → Service ClusterIP → Pod IP 10.42.x.x:8080
+  
+  Step 5: Ingress resources point to Services
+    → Your app Ingress (k8s/ingress.yaml) points to Service
+    → NGINX reads Ingress, knows where to route
+
+ALL AUTOMATIC after helm install!
+
+
+================================================================================
+CLARIFICATION 5: WHERE IS THE SETUP? WHERE ARE THE FILES?
+================================================================================
+
+THE QUESTION:
+  "where is setup? where are the files?"
+
+THE ANSWER:
+
+INFRASTRUCTURE SETUP:
+  Location: infrastructure/
+  Files:
+    infrastructure/terraform.tf
+    infrastructure/variables.tf
+    infrastructure/environments/dev/main.tf
+    infrastructure/environments/dev/variables.tf
+    infrastructure/modules/networking/main.tf
+    infrastructure/modules/compute/main.tf
+    infrastructure/modules/compute/userdata.sh.tpl ← k3s + Helm install here
+    infrastructure/modules/iam/main.tf
+    infrastructure/modules/ecr/main.tf
+    infrastructure/modules/observability/main.tf
+
+K3S YAML SETUP:
+  Location: k8s/
+  Files:
+    k8s/namespace.yaml ← Creates staging namespace
+    k8s/app-deployment.yaml ← Creates SA, RBAC, NetworkPolicy
+    k8s/service.yaml ← Creates Services
+    k8s/ingress.yaml ← Creates Ingress (NGINX routes)
+    k8s/rollout.yaml ← Creates Argo Rollouts Rollout
+    k8s/prometheus-rules.yaml ← Creates AnalysisTemplate
+    k8s/argocd-app.yaml ← Argo CD Application CRD
+
+APPLICATION SETUP:
+  Location: app/
+  Files:
+    app/main.py ← FastAPI application
+    app/Dockerfile ← Docker build
+    app/requirements.txt ← Dependencies
+    app/requirements-prod.txt ← Runtime dependencies only
+
+CI/CD PIPELINE SETUP:
+  Location: .github/workflows/
+  Files:
+    .github/workflows/ci.yml ← PR pipeline (Stages 1-11)
+    .github/workflows/deploy.yml ← Deploy pipeline (Stages 12-13)
+    .github/workflows/security-scan.yml ← Reusable workflow
+    .github/workflows/terraform.yml ← Terraform plan/apply
+
+
+EXECUTION FLOW:
+
+1. TERRAFORM APPLY (manual):
+   You run: terraform apply
+   → Terraform reads: infrastructure/environments/dev/main.tf
+   → Calls modules: networking, compute, iam, ecr, observability
+   → Creates AWS resources
+   → Passes userdata.sh.tpl to EC2
+
+2. USERDATA SCRIPT (automatic on EC2 boot):
+   EC2 boots → Executes: infrastructure/modules/compute/userdata.sh.tpl
+   → Installs k3s
+   → Installs Helm
+   → Runs: helm install argocd argo/argo-cd
+   → Runs: helm install argo-rollouts argo/argo-rollouts
+   → Runs: helm install kyverno kyverno/kyverno
+   → Runs: helm install kube-prometheus-stack prometheus/...
+   → Configures ECR credentials
+
+3. YOU CONFIGURE ARGO CD (manual):
+   You run:
+     helm install ingress-nginx ...
+     kubectl apply -f k8s/argocd-app.yaml
+
+4. ARGO CD SYNCS K8S FILES (automatic):
+   Argo CD reads: k8s/ folder from GitHub
+   → Applies: k8s/namespace.yaml
+   → Applies: k8s/app-deployment.yaml
+   → Applies: k8s/service.yaml
+   → Applies: k8s/ingress.yaml
+   → Applies: k8s/rollout.yaml
+   → Applies: k8s/prometheus-rules.yaml
+
+5. GITHUB ACTIONS CI/CD (automatic):
+   Developer commits → GitHub CI runs: .github/workflows/ci.yml
+   → Tests run
+   → Merge to main → GitHub Deploy runs: .github/workflows/deploy.yml
+   → Image built
+   → Pushed to ECR
+   → Manifest updated
+   → Argo CD detects and syncs
+
+6. ARGO ROLLOUTS DEPLOYS (automatic):
+   Argo Rollouts sees image change in k8s/rollout.yaml
+   → Executes canary deployment
+   → Monitors Prometheus metrics
+   → Auto-promotes or auto-rollbacks
+
+
+SUMMARY TABLE:
+
+┌──────────────────────────────────────────────────────────────────────────┐
+│ What                    Where                        Who        When      │
+├──────────────────────────────────────────────────────────────────────────┤
+│ AWS Infrastructure      infrastructure/terraform    Terraform  Automatic │
+│ k3s + Helm charts       userdata.sh.tpl             EC2 boot   Automatic │
+│ NGINX Ingress           helm install               You        Manual    │
+│ Argo CD Application     k8s/argocd-app.yaml        You        Manual    │
+│ App YAML resources      k8s/*.yaml                 Argo CD    Automatic │
+│ Application code        app/main.py                Developer  Git push  │
+│ CI/CD pipeline          .github/workflows/         GitHub     Auto      │
+│ Canary deployment       Argo Rollouts              Auto       Auto      │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+MANUAL STEPS SUMMARY (What YOU need to do)
+================================================================================
+
+Step 1: Generate SSH key
+  Command: ssh-keygen -t ed25519 -f ~/.ssh/genesis-k3s -C "genesis-k3s-node"
+  File: ~/.ssh/genesis-k3s (private key)
+  File: ~/.ssh/genesis-k3s.pub (public key)
+  Use: Add public key to infrastructure/environments/dev/variables.tf
+
+Step 2: Configure Terraform variables
+  File: infrastructure/environments/dev/variables.tf
+  Set: aws_region, vpc_cidr, admin_cidr, alarm_email, k3s_ssh_public_key, etc.
+
+Step 3: Create S3 bucket
+  Command: aws s3 mb s3://genesis-terraform-state-320644184091 --region ap-south-2
+  Command: aws s3api put-bucket-versioning --bucket ... --versioning-configuration Status=Enabled
+
+Step 4: Create DynamoDB table
+  Command: aws dynamodb create-table --table-name genesis-terraform-lock ...
+
+Step 5: Run Terraform
+  Commands:
+    cd infrastructure/environments/dev
+    terraform init -backend-config=...
+    terraform apply
+
+Step 6: Get kubeconfig from EC2
+  Command: ssh -i ~/.ssh/genesis-k3s ec2-user@<k3s-ip> "sudo cat /etc/rancher/k3s/k3s.yaml"
+  Save: ~/.kube/config (edit IP addresses)
+
+Step 7: Get Argo CD password
+  Command: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+
+Step 8: Configure Argo CD (Web UI)
+  Browser: https://<k3s-ip>:30950
+  Login: admin + <password from Step 7>
+  Add repo: Settings → Repositories → Connect (GitHub PAT + URL)
+
+Step 9: Apply Argo CD Application CRD
+  Command: kubectl apply -f k8s/argocd-app.yaml
+
+Step 10: Install NGINX Ingress
+  Commands:
+    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+    helm repo update
+    helm install ingress-nginx ingress-nginx/ingress-nginx \
+      --namespace ingress-nginx --create-namespace
+
+Step 11: Configure GitHub Secrets
+  Settings → Secrets and Variables → Actions
+  Add: AWS_DEPLOY_ROLE_ARN, ARGOCD_SERVER, ARGOCD_PASSWORD, K3S_KUBECONFIG_B64, K3S_PUBLIC_IP
+
+Step 12: Configure GitHub required reviewer
+  Settings → Environments → staging → Required Reviewers
+  Add: Your GitHub username
+
+After these 12 steps:
+  ✓ Everything is FULLY AUTOMATED
+  ✓ Push code → GitHub Actions builds → Deploys → Canary runs
+  ✓ No more manual work needed
