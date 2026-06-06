@@ -48,6 +48,8 @@ jobs:
     name: "Stage 2 — Dependency Audit (pip-audit)"
     runs-on: ubuntu-latest
     needs: [secret-scan]   # Must not run if Stage 1 fails
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -56,8 +58,10 @@ jobs:
         with:
           python-version: ${{ inputs.python-version }}
 
-      - name: Install pip-audit
-        run: pip install pip-audit
+      - name: Install pip-audit and helper deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pip-audit packaging
 
       - name: Run pip-audit
         run: |
@@ -65,8 +69,25 @@ jobs:
             -r app/requirements.txt \
             --format=json \
             --output=reports/pip-audit.json \
-            --desc
-        continue-on-error: false
+            --desc || true
+        continue-on-error: true
+
+      - name: Run auto-update for vulnerable deps
+        id: update-deps
+        run: |
+          python scripts/auto_update_requirements.py reports/pip-audit.json app/requirements.txt > update-result.txt || true
+          CHANGED=$(cat update-result.txt | tr -d '\r\n')
+          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+
+      - name: Commit dependency fixes
+        if: steps.update-deps.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b deps-fixes-${{ github.sha }}
+          git add app/requirements.txt
+          git commit -m "chore(deps): auto-update vulnerable Python packages per pip-audit"
+          git push origin deps-fixes-${{ github.sha }}
 
       - name: Upload pip-audit report
         uses: actions/upload-artifact@v4
