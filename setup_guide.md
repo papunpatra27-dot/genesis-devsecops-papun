@@ -15,7 +15,7 @@ Before running a single command, collect these four values. Every REPLACE_ strin
 
 | Your value | What it is | Example |
 |---|---|---|
-| `YOUR_ACCOUNT_ID` | Your 12-digit AWS account ID | `123456789012` |
+| `YOUR_ACCOUNT_ID` | Your 12-digit AWS account ID | `320644184091` |
 | `YOUR_GITHUB_USERNAME` | Your GitHub username or org | `papun-dev` |
 | `YOUR_EMAIL` | Your email for SNS alert notifications | `papun@example.com` |
 | `YOUR_SSH_PUBLIC_KEY` | Full content of your EC2 SSH public key (Step 3.4 generates this) | `ssh-ed25519 AAAA...` |
@@ -32,14 +32,14 @@ Every file that contains a placeholder is listed below. You will replace them in
 |---|---|---|
 | 21 | `REPLACE_WITH_YOUR_PUBLIC_SSH_KEY` | Full contents of your SSH public key (generated in Step 3.4) |
 | 24 | `REPLACE_WITH_GITHUB_ORG` | Your GitHub username, e.g. `papun-dev` |
-| 32 | `genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID` | `genesis-devsecops-terraform-state-123456789012` |
+| 32 | `genesis-devsecops-terraform-state-320644184091` | `genesis-devsecops-terraform-state-320644184091` |
 | 37 | `REPLACE_WITH_YOUR_EMAIL@example.com` | Your real email address |
 
 ### File 2 — `infrastructure/environments/dev/backend.hcl`
 
 | Line | Placeholder | Replace with |
 |---|---|---|
-| 5 | `genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID` | `genesis-devsecops-terraform-state-123456789012` |
+| 5 | `genesis-devsecops-terraform-state-320644184091` | `genesis-devsecops-terraform-state-320644184091` |
 
 ### File 3 — `infrastructure/environments/prod/terraform.tfvars`
 
@@ -48,32 +48,32 @@ Every file that contains a placeholder is listed below. You will replace them in
 | 12 | `REPLACE_WITH_VPN_OR_BASTION_CIDR` | Your IP with /32, e.g. `203.0.113.10/32` (or `0.0.0.0/0` for dev testing) |
 | 15 | `REPLACE_WITH_YOUR_PUBLIC_SSH_KEY` | Same SSH public key as above |
 | 17 | `REPLACE_WITH_GITHUB_ORG` | Your GitHub username |
-| 23 | `genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID` | `genesis-devsecops-terraform-state-123456789012` |
+| 23 | `genesis-devsecops-terraform-state-320644184091` | `genesis-devsecops-terraform-state-320644184091` |
 | 27 | `REPLACE_WITH_OPS_EMAIL@example.com` | Your real email address |
 
 ### File 4 — `infrastructure/environments/prod/backend.hcl`
 
 | Line | Placeholder | Replace with |
 |---|---|---|
-| 2 | `genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID` | `genesis-devsecops-terraform-state-123456789012` |
+| 2 | `genesis-devsecops-terraform-state-320644184091` | `genesis-devsecops-terraform-state-320644184091` |
 
 ### File 5 — `infrastructure/kyverno-policies/ecr-only-images.yaml`
 
 | Lines | Placeholder | Replace with |
 |---|---|---|
-| 38, 44, 65 | `REPLACE_ACCOUNT_ID` (appears 3 times) | Your 12-digit account ID `123456789012` |
+| 38, 44, 65 | `320644184091` (appears 3 times) | Your 12-digit account ID `320644184091` |
 
 ### File 6 — `infrastructure/conftest-policies/test/compliant_deployment.yaml`
 
 | Line | Placeholder | Replace with |
 |---|---|---|
-| 19 | `REPLACE_ACCOUNT_ID` | Your 12-digit account ID |
+| 19 | `320644184091` | Your 12-digit account ID |
 
 ### File 7 — `k8s/rollout.yaml`
 
 | Line | Placeholder | Replace with |
 |---|---|---|
-| 50 | `REPLACE_ACCOUNT_ID` | Your 12-digit account ID |
+| 50 | `320644184091` | Your 12-digit account ID |
 | 50 | `REPLACE_GIT_SHA` | The git SHA of the image you will push in Part 14 |
 
 ### File 8 — `k8s/argocd-app.yaml`
@@ -190,7 +190,7 @@ The command prompts you for four values, one at a time. Type each and press Ente
 ```
 AWS Access Key ID [None]:     paste-your-access-key-id-here
 AWS Secret Access Key [None]: paste-your-secret-access-key-here
-Default region name [None]:   us-east-1
+Default region name [None]:   ap-south-2
 Default output format [None]: json
 ```
 
@@ -205,8 +205,8 @@ Expected output:
 ```json
 {
     "UserId": "AIDA...",
-    "Account": "123456789012",
-    "Arn": "arn:aws:iam::123456789012:user/your-iam-username"
+    "Account": "320644184091",
+    "Arn": "arn:aws:iam::320644184091:user/your-iam-username"
 }
 ```
 
@@ -219,7 +219,7 @@ The `"Account"` value is your 12-digit AWS account ID. Write it down.
 # These variables live only for this PowerShell session.
 # If you close and reopen PowerShell, run these two lines again before any AWS commands.
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$REGION     = "us-east-1"
+$REGION     = "ap-south-2"
 
 Write-Host "Account ID : $ACCOUNT_ID"
 Write-Host "Region     : $REGION"
@@ -288,7 +288,7 @@ $YOUR_EMAIL = "your@email.com"         # <-- change this to your actual email
 $content = Get-Content infrastructure/environments/dev/terraform.tfvars -Raw
 $content = $content -replace 'REPLACE_WITH_YOUR_PUBLIC_SSH_KEY', $SSH_PUB_KEY
 $content = $content -replace 'REPLACE_WITH_GITHUB_ORG', $GITHUB_ORG
-$content = $content -replace "genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID", "genesis-devsecops-terraform-state-$ACCOUNT_ID"
+$content = $content -replace "genesis-devsecops-terraform-state-320644184091", "genesis-devsecops-terraform-state-$ACCOUNT_ID"
 $content = $content -replace 'REPLACE_WITH_YOUR_EMAIL@example\.com', $YOUR_EMAIL
 Set-Content infrastructure/environments/dev/terraform.tfvars -Value $content -Encoding utf8
 ```
@@ -305,7 +305,7 @@ Select-String -Path infrastructure/environments/dev/terraform.tfvars -Pattern "R
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
 (Get-Content infrastructure/environments/dev/backend.hcl) `
-  -replace "REPLACE_ACCOUNT_ID", $ACCOUNT_ID | `
+  -replace "320644184091", $ACCOUNT_ID | `
   Set-Content infrastructure/environments/dev/backend.hcl -Encoding utf8
 ```
 
@@ -324,7 +324,7 @@ $content = Get-Content infrastructure/environments/prod/terraform.tfvars -Raw
 $content = $content -replace 'REPLACE_WITH_VPN_OR_BASTION_CIDR', '0.0.0.0/0'       # use your IP/32 for real prod
 $content = $content -replace 'REPLACE_WITH_YOUR_PUBLIC_SSH_KEY', $SSH_PUB_KEY
 $content = $content -replace 'REPLACE_WITH_GITHUB_ORG', $GITHUB_ORG
-$content = $content -replace "genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID", "genesis-devsecops-terraform-state-$ACCOUNT_ID"
+$content = $content -replace "genesis-devsecops-terraform-state-320644184091", "genesis-devsecops-terraform-state-$ACCOUNT_ID"
 $content = $content -replace 'REPLACE_WITH_OPS_EMAIL@example\.com', $YOUR_EMAIL
 Set-Content infrastructure/environments/prod/terraform.tfvars -Value $content -Encoding utf8
 ```
@@ -341,7 +341,7 @@ Select-String -Path infrastructure/environments/prod/terraform.tfvars -Pattern "
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
 (Get-Content infrastructure/environments/prod/backend.hcl) `
-  -replace "REPLACE_ACCOUNT_ID", $ACCOUNT_ID | `
+  -replace "320644184091", $ACCOUNT_ID | `
   Set-Content infrastructure/environments/prod/backend.hcl -Encoding utf8
 ```
 
@@ -357,7 +357,7 @@ Select-String -Path infrastructure/environments/prod/backend.hcl -Pattern "REPLA
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
 (Get-Content infrastructure/kyverno-policies/ecr-only-images.yaml) `
-  -replace "REPLACE_ACCOUNT_ID", $ACCOUNT_ID | `
+  -replace "320644184091", $ACCOUNT_ID | `
   Set-Content infrastructure/kyverno-policies/ecr-only-images.yaml -Encoding utf8
 ```
 
@@ -373,7 +373,7 @@ Select-String -Path infrastructure/kyverno-policies/ecr-only-images.yaml -Patter
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
 (Get-Content infrastructure/conftest-policies/test/compliant_deployment.yaml) `
-  -replace "REPLACE_ACCOUNT_ID", $ACCOUNT_ID | `
+  -replace "320644184091", $ACCOUNT_ID | `
   Set-Content infrastructure/conftest-policies/test/compliant_deployment.yaml -Encoding utf8
 ```
 
@@ -384,21 +384,21 @@ Select-String -Path infrastructure/conftest-policies/test/compliant_deployment.y
 # Expected: no output
 ```
 
-### Step 3.8 — Replace REPLACE_ACCOUNT_ID in rollout.yaml (leave REPLACE_GIT_SHA — Part 14 sets it)
+### Step 3.8 — Replace 320644184091 in rollout.yaml (leave REPLACE_GIT_SHA — Part 14 sets it)
 
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
-# IMPORTANT: only replace REPLACE_ACCOUNT_ID here, NOT REPLACE_GIT_SHA
+# IMPORTANT: only replace 320644184091 here, NOT REPLACE_GIT_SHA
 # REPLACE_GIT_SHA gets replaced in Part 14 when you build and push the image
 (Get-Content k8s/rollout.yaml) `
-  -replace "REPLACE_ACCOUNT_ID", $ACCOUNT_ID | `
+  -replace "320644184091", $ACCOUNT_ID | `
   Set-Content k8s/rollout.yaml -Encoding utf8
 ```
 
-Verify REPLACE_ACCOUNT_ID is gone but REPLACE_GIT_SHA still exists:
+Verify 320644184091 is gone but REPLACE_GIT_SHA still exists:
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
-Select-String -Path k8s/rollout.yaml -Pattern "REPLACE_ACCOUNT_ID"
+Select-String -Path k8s/rollout.yaml -Pattern "320644184091"
 # Expected: no output (replaced)
 
 Select-String -Path k8s/rollout.yaml -Pattern "REPLACE_GIT_SHA"
@@ -457,7 +457,7 @@ Select-String -Path .github/CODEOWNERS -Pattern "REPLACE_"
 
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
-Select-String -Path infrastructure/, k8s/, .github/ -Pattern "REPLACE_ACCOUNT_ID|REPLACE_GITHUB_ORG|REPLACE_WITH_" -Recurse
+Select-String -Path infrastructure/, k8s/, .github/ -Pattern "320644184091|REPLACE_GITHUB_ORG|REPLACE_WITH_" -Recurse
 # Expected: absolutely no output
 # If any matches appear, go back to the step for that file and fix it
 ```
@@ -476,10 +476,10 @@ The S3 bucket name used in your `backend.hcl` is: `genesis-devsecops-terraform-s
 # FOLDER: anywhere
 aws s3api create-bucket `
   --bucket "genesis-devsecops-terraform-state-$ACCOUNT_ID" `
-  --region us-east-1
+  --region ap-south-2
 ```
 
-Expected output: `{"Location": "/genesis-devsecops-terraform-state-123456789012"}`
+Expected output: `{"Location": "/genesis-devsecops-terraform-state-320644184091"}`
 If you see `BucketAlreadyExists` — the bucket already exists, continue to Step 4.2.
 
 ### Step 4.2 — Enable versioning
@@ -538,7 +538,7 @@ aws s3api get-public-access-block --bucket "genesis-devsecops-terraform-state-$A
 # FOLDER: anywhere
 aws s3api create-bucket `
   --bucket "genesis-tf-state-logs-$ACCOUNT_ID" `
-  --region us-east-1
+  --region ap-south-2
 ```
 
 ### Step 4.6 — Enable access logging on the state bucket pointing to logs bucket
@@ -568,7 +568,7 @@ aws dynamodb create-table `
   --attribute-definitions AttributeName=LockID,AttributeType=S `
   --key-schema AttributeName=LockID,KeyType=HASH `
   --billing-mode PAY_PER_REQUEST `
-  --region us-east-1
+  --region ap-south-2
 ```
 
 Wait 15 seconds, then verify it is ACTIVE:
@@ -657,7 +657,7 @@ aws iam list-open-id-connect-providers --query 'OpenIDConnectProviderList[*].Arn
 # FOLDER: anywhere
 $GITHUB_ROLE_ARN = (aws iam get-role --role-name genesis-github-actions-deploy --query 'Role.Arn' --output text)
 Write-Host "GitHub Actions Role ARN: $GITHUB_ROLE_ARN"
-# This looks like: arn:aws:iam::123456789012:role/genesis-github-actions-deploy
+# This looks like: arn:aws:iam::320644184091:role/genesis-github-actions-deploy
 # Copy and save this — you need it in Part 6 Step 6.2
 ```
 
@@ -679,7 +679,7 @@ Click the **Secrets** tab → **New repository secret** — add ALL of these:
 
 | Secret Name | How to get the value | Used by |
 |---|---|---|
-| `AWS_DEPLOY_ROLE_ARN` | The full ARN from Step 5.6 (e.g. `arn:aws:iam::123456789012:role/genesis-github-actions-deploy`) | All AWS steps in ci.yml, deploy.yml, terraform.yml |
+| `AWS_DEPLOY_ROLE_ARN` | The full ARN from Step 5.6 (e.g. `arn:aws:iam::320644184091:role/genesis-github-actions-deploy`) | All AWS steps in ci.yml, deploy.yml, terraform.yml |
 | `ARGOCD_SERVER` | `YOUR_EC2_IP:30080` — set after EC2 is up in Part 7 | deploy.yml Stage 12 (argocd-sync) |
 | `ARGOCD_PASSWORD` | kubectl command below — set after Part 11 | deploy.yml Stage 12 (argocd-sync) |
 | `K3S_KUBECONFIG_B64` | Base64-encoded kubeconfig — instructions below, set after Part 8 | deploy.yml Stage 12 (argocd-sync) |
@@ -947,7 +947,7 @@ Browser: `http://YOUR_EC2_IP:32000` — login: `admin` / `admin123!`
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$REGION     = "us-east-1"
+$REGION     = "ap-south-2"
 $ECR_URI    = "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/genesis-platform-api"
 $GIT_SHA    = (git rev-parse --short HEAD)
 
@@ -1224,7 +1224,7 @@ aws ecr describe-repositories --repository-names genesis-platform-api `
 # Expected: {"Mutability": "IMMUTABLE", "ScanOnPush": true}
 
 # Zero REPLACE_ strings remaining
-Select-String -Path infrastructure/, k8s/, .github/ -Pattern "REPLACE_ACCOUNT_ID|REPLACE_GITHUB_ORG|REPLACE_WITH_" -Recurse
+Select-String -Path infrastructure/, k8s/, .github/ -Pattern "320644184091|REPLACE_GITHUB_ORG|REPLACE_WITH_" -Recurse
 # Expected: no output
 
 # Zero AWS credentials in workflow files
@@ -1244,7 +1244,7 @@ Select-String -Path k8s/analysis-template.yaml -Pattern "http_requests_total"
 ```powershell
 # LOCAL: Restore session variables (run at start of every new PowerShell session)
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$REGION     = "us-east-1"
+$REGION     = "ap-south-2"
 $ECR_URI    = "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/genesis-platform-api"
 $GITHUB_ORG = "your-github-username"
 $EC2_IP     = (aws ec2 describe-instances --filters "Name=tag:Project,Values=genesis" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
@@ -1275,4 +1275,5 @@ cd ~/devsecops-papun && git pull origin main
 - Grafana:    `http://EC2_IP:32000`    login: `admin` / `admin123!`
 - Argo CD:    `https://EC2_IP:30443`  login: `admin` / (kubectl secret — Part 11)
 - Prometheus: `http://EC2_IP:32001`
+
 

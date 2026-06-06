@@ -111,7 +111,7 @@ genesis-devsecops-papun/
 
 ```bash
 # Replace ACCOUNT_ID throughout
-aws s3api create-bucket --bucket genesis-devsecops-terraform-state-ACCOUNT_ID --region us-east-1
+aws s3api create-bucket --bucket genesis-devsecops-terraform-state-ACCOUNT_ID --region ap-south-2
 aws s3api put-bucket-versioning --bucket genesis-devsecops-terraform-state-ACCOUNT_ID \
   --versioning-configuration Status=Enabled
 aws s3api put-bucket-encryption --bucket genesis-devsecops-terraform-state-ACCOUNT_ID \
@@ -123,7 +123,7 @@ aws s3api put-public-access-block --bucket genesis-devsecops-terraform-state-ACC
 aws dynamodb create-table --table-name genesis-terraform-state-lock \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST --region us-east-1
+  --billing-mode PAY_PER_REQUEST --region ap-south-2
 ```
 
 ### 2. Deploy Dev Environment
@@ -221,3 +221,4 @@ kubectl argo rollouts get rollout genesis-platform-api -n staging --watch
 | `SEMGREP_APP_TOKEN` | Semgrep cloud token (optional) |
 
 > `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are **never used**. All AWS auth is OIDC-federated.
+

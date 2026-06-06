@@ -20,8 +20,9 @@ github_repo = "genesis-devsecops-papun"
 ecr_repository_name       = "genesis-platform-api"
 ecr_image_retention_count = 20
 
-state_bucket_name     = "genesis-devsecops-terraform-state-REPLACE_ACCOUNT_ID"
+state_bucket_name     = "genesis-devsecops-terraform-state-320644184091"
 state_lock_table_name = "genesis-terraform-state-lock"
 
 log_retention_days = 90
 alarm_email        = "REPLACE_WITH_OPS_EMAIL@example.com"
+
