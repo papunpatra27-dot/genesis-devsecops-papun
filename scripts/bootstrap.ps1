@@ -5,7 +5,7 @@
 ##############################################################################
 [CmdletBinding()]
 param(
-    [string]$Region  = $env:AWS_REGION  ?? "us-east-1",
+    [string]$Region  = $env:AWS_REGION  ?? "ap-south-2",
     [string]$Project = $env:PROJECT     ?? "genesis"
 )
 
@@ -34,7 +34,7 @@ function New-BucketIfNotExists([string]$BucketName) {
         Write-Host "      Bucket $BucketName already exists — skipping."
         return $false
     } catch {
-        if ($Region -eq "us-east-1") {
+        if ($Region -eq "ap-south-2") {
             aws s3api create-bucket --bucket $BucketName --region $Region
         } else {
             aws s3api create-bucket --bucket $BucketName --region $Region `

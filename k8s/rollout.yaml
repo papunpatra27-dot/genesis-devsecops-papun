@@ -12,7 +12,7 @@
 #   4. Route 25% to canary → pause 2 minutes
 #   5. Route 50% to canary → auto-promote to full rollout
 #
-# Replace REPLACE_ACCOUNT_ID with your AWS account ID.
+# Replace 320644184091 with your AWS account ID.
 ##############################################################################
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
@@ -47,7 +47,7 @@ spec:
       containers:
         - name: api
           # Image tag is replaced by the CI pipeline with git-SHA tag
-          image: REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/genesis-platform-api:REPLACE_GIT_SHA
+          image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:REPLACE_GIT_SHA
           imagePullPolicy: Always
           ports:
             - name: http
@@ -128,3 +128,4 @@ spec:
         - setWeight: 50
         # Step 6 — Full rollout (100%)
         - setWeight: 100
+

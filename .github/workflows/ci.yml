@@ -34,7 +34,7 @@ permissions:
   id-token: write          # Cosign OIDC toolchain verify (Stage 8)
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: ap-south-2
   ECR_REPOSITORY: genesis-platform-api
   PYTHON_VERSION: "3.12"
 

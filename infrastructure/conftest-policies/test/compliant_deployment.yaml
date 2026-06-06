@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/genesis-platform-api:sha-abc1234
+          image: REPLACE_ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-abc1234
           ports:
             - containerPort: 8000
           resources:

@@ -4,15 +4,15 @@
 
 ## Section 1 — Current State Inventory
 
-| Component | Location | Lost in us-east-1 failure? | Recoverable without DR setup? |
+| Component | Location | Lost in ap-south-2 failure? | Recoverable without DR setup? |
 |---|---|---|---|
-| EC2 t2.micro (k3s host) | us-east-1, single AZ | Yes — instance terminated | No — must be re-provisioned |
+| EC2 t2.micro (k3s host) | ap-south-2, single AZ | Yes — instance terminated | No — must be re-provisioned |
 | k3s runtime + config | EC2 root volume (EBS, gp3, encrypted) | Yes — EBS is AZ-local | No — must reinstall from scratch |
 | Kubernetes workload state (etcd) | EC2 root volume | Yes | Partially — Argo CD resync restores declared state; transient in-flight data lost |
 | In-memory units_db | Application process memory | Yes | No — data is ephemeral; no persistence layer |
-| ECR container images | us-east-1 ECR | Yes — ECR is regional | No — images must be rebuilt from source or pulled from a secondary registry |
-| Terraform state file | S3 bucket (us-east-1) | Availability impact only (S3 99.99%) | Mostly — S3 multi-AZ but not multi-region; if us-east-1 is fully dark, state is inaccessible |
-| DynamoDB state lock table | us-east-1 DynamoDB | Availability impact only | Mostly — same caveat as S3 |
+| ECR container images | ap-south-2 ECR | Yes — ECR is regional | No — images must be rebuilt from source or pulled from a secondary registry |
+| Terraform state file | S3 bucket (ap-south-2) | Availability impact only (S3 99.99%) | Mostly — S3 multi-AZ but not multi-region; if ap-south-2 is fully dark, state is inaccessible |
+| DynamoDB state lock table | ap-south-2 DynamoDB | Availability impact only | Mostly — same caveat as S3 |
 | Kubernetes manifests | GitHub (multi-region CDN) | No — GitHub is globally distributed | Yes — manifests survive any single region failure |
 | Kyverno ClusterPolicies | Git + running cluster | In-cluster policies lost; Git copy survives | Yes — policies re-applied from Git via Argo CD |
 | Argo CD configuration | In-cluster + argocd-secret | In-cluster state lost; app definitions in Git survive | Partially — Argo CD must be reinstalled; apps re-registered from Git |
@@ -64,7 +64,7 @@ Kyverno must be installed **before** application deployments are synced. If appl
 
 ### Container Images in ECR
 
-ECR is regional. In a us-east-1 outage, images are unavailable. Strategies evaluated:
+ECR is regional. In a ap-south-2 outage, images are unavailable. Strategies evaluated:
 
 - **Rebuild from source**: if GitHub Actions is accessible and a secondary ECR in us-west-2 is configured, CI can push a new build there. Build time ~5 minutes. Requires updating the Rollout manifest image reference — adds complexity during an incident.
 - **ECR cross-region replication** (recommended for production budget): enable replication to us-west-2 with a replication rule for `genesis-platform-api`. Images are mirrored automatically. No additional build time during DR.
@@ -74,7 +74,7 @@ ECR is regional. In a us-east-1 outage, images are unavailable. Strategies evalu
 
 ### Terraform State in S3
 
-S3 provides 99.99% availability but is regional. In a full us-east-1 outage, the state bucket is inaccessible. However:
+S3 provides 99.99% availability but is regional. In a full ap-south-2 outage, the state bucket is inaccessible. However:
 - The state file itself is not needed to provision a new environment — `terraform apply` with a fresh backend (empty state) re-creates all resources.
 - Cross-region S3 replication (e.g., to us-west-2) solves the access problem but introduces state divergence risk: if the primary bucket gets a write during a partial outage and the replica is used for `apply`, the state files diverge. This is resolved by keeping the replica read-only (no writes until primary is confirmed lost).
 - **Current gap**: cross-region replication is not configured. See Section 5.
@@ -89,11 +89,11 @@ S3 provides 99.99% availability but is regional. In a full us-east-1 outage, the
 
 ```
 # Step 1: Configure AWS CLI for the recovery region
-aws configure set region us-east-1
+aws configure set region ap-south-2
 aws sts get-caller-identity   # Verify credentials are valid
 
 # Step 2: Ensure Terraform state backend is accessible
-# If us-east-1 S3 is down, update backend.hcl to a us-west-2 replica bucket
+# If ap-south-2 S3 is down, update backend.hcl to a us-west-2 replica bucket
 cd infrastructure/environments/prod
 
 # Step 3: Initialise Terraform (connects to remote state)
@@ -185,11 +185,11 @@ ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
 echo "Argo CD password: $ARGOCD_PASS"
 
 # Step 18: Create ECR pull secret in staging namespace
-aws ecr get-login-password --region us-east-1 | \
+aws ecr get-login-password --region ap-south-2 | \
   kubectl create secret docker-registry ecr-credentials \
     --docker-server=$(terraform output -raw ecr_repository_url | cut -d/ -f1) \
     --docker-username=AWS \
-    --docker-password="$(aws ecr get-login-password --region us-east-1)" \
+    --docker-password="$(aws ecr get-login-password --region ap-south-2)" \
     --namespace staging
 
 # Step 19: Register the platform application in Argo CD
@@ -262,11 +262,11 @@ print('RECOVERY VALIDATED:', json.dumps(body))
 
 | Gap | Impact | Production Fix | Estimated Effort |
 |---|---|---|---|
-| **ECR images are regional** | In a us-east-1 failure, no images available; must rebuild from source. Adds 10-15 min to RTO. | Enable ECR replication to a secondary region (`aws ecr put-replication-configuration`). Replicate to us-west-2 with read-only access during DR. | 1 day to implement + policy update |
+| **ECR images are regional** | In a ap-south-2 failure, no images available; must rebuild from source. Adds 10-15 min to RTO. | Enable ECR replication to a secondary region (`aws ecr put-replication-configuration`). Replicate to us-west-2 with read-only access during DR. | 1 day to implement + policy update |
 | **S3 state bucket not cross-region replicated** | Terraform state inaccessible during regional failure; must use empty state and risk re-creating or importing existing resources. | Enable S3 Cross-Region Replication to a us-west-2 bucket. Keep replica read-only (no-write bucket policy) until primary is confirmed lost. Add a state export step to the weekly DR drill. | 0.5 days + monitoring |
 | **No automated DR drill** | RTO is estimated, not tested. The runbook may have errors or missing steps discovered only during a real incident. | Build a quarterly DR drill automation: a GitHub Actions workflow that provisions a parallel environment in us-west-2, runs the full runbook, executes the smoke test, captures the elapsed time, then tears down. Failures produce a drill report. | 3-5 days |
 | **k3s etcd not backed up** | If the EC2 instance root volume is corrupted (not just unavailable), etcd data is lost. Kubernetes manifests are safe in Git but any CRD state not reflected in Git (e.g., manually created Secrets, ConfigMaps) is gone. | Use `etcdctl snapshot save` daily to S3. Velero for Kubernetes object backup of the staging namespace. | 2 days |
 | **In-memory unit records** | All platform units created before the failure are permanently lost. No persistence layer means RPO is unbounded for business data. | Replace the in-memory dict with a managed database (RDS PostgreSQL, DynamoDB, or Redis). Scope and cost depend on data model requirements. | 1-2 weeks |
 | **Single-node k3s** | No HA control plane. k3s itself going down (OOM, disk full) causes a full cluster outage. | Run k3s in embedded etcd HA mode with 3 t2.micro nodes (still free-tier if within 750h total). Or use k3s with an external datastore (RDS PostgreSQL). | 2-3 days |
 | **RTO unmeasured (estimated, not tested)** | The 4-hour RTO estimate is based on component timings but has never been drilled end-to-end. The real RTO is unknown. | Automated quarterly drill (see above). Record actual elapsed time per runbook step and update the SLO documentation. | Included in drill effort |
-| **No secondary region Argo CD** | If us-east-1 is unavailable, GitOps synchronisation cannot be initiated until a new Argo CD is installed in the recovery region. | Pre-install Argo CD in a warm-standby secondary region cluster (even a t2.micro k3s node, stopped when not needed — costs nothing). On DR, start the instance, update the Git remote, and sync. | 1 day setup, ~$0/month if stopped |
+| **No secondary region Argo CD** | If ap-south-2 is unavailable, GitOps synchronisation cannot be initiated until a new Argo CD is installed in the recovery region. | Pre-install Argo CD in a warm-standby secondary region cluster (even a t2.micro k3s node, stopped when not needed — costs nothing). On DR, start the instance, update the Git remote, and sync. | 1 day setup, ~$0/month if stopped |

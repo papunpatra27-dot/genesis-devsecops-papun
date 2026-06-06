@@ -35,13 +35,13 @@ spec:
       validate:
         message: >-
           Images must be pulled from the project ECR registry
-          (REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com).
+          (REPLACE_ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com).
           Public registry images (Docker Hub, gcr.io, quay.io) are not
           permitted in staging or production namespaces.
         foreach:
           - list: "request.object.spec.containers"
             pattern:
-              image: "REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/*"
+              image: "REPLACE_ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/*"
     - name: check-init-container-images-from-ecr
       match:
         any:
@@ -62,4 +62,4 @@ spec:
         foreach:
           - list: "request.object.spec.initContainers"
             pattern:
-              image: "REPLACE_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/*"
+              image: "REPLACE_ACCOUNT_ID.dkr.ecr.ap-south-2.amazonaws.com/*"

@@ -52,7 +52,7 @@ permissions:
   id-token: write    # OIDC for AWS (ECR push) and Cosign (keyless signing)
 
 env:
-  AWS_REGION: us-east-1
+  AWS_REGION: ap-south-2
   ECR_REPOSITORY: genesis-platform-api
 
 jobs:
@@ -245,11 +245,11 @@ jobs:
             echo "No changes to rollout.yaml (same SHA already deployed)"
             COMMIT_SHA=$(git rev-parse HEAD)
           else
-            git commit -m "chore(deploy): update image to ${{ needs.build-sign-push.outputs.sha-tag }}
-
-Automated update by GitHub Actions deploy workflow.
-Image: ${{ needs.build-sign-push.outputs.image-uri }}
-Trigger: ${{ github.sha }}"
+            git commit \
+            -m "chore(deploy): update image to ${{ needs.build-sign-push.outputs.sha-tag }}" \
+            -m "Automated update by GitHub Actions deploy workflow" \
+            -m "Image: ${{ needs.build-sign-push.outputs.image-uri }}" \
+            -m "Trigger: ${{ github.sha }}"
 
             git push origin main
             COMMIT_SHA=$(git rev-parse HEAD)

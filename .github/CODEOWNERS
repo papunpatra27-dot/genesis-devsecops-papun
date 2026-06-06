@@ -1,23 +1,22 @@
 # CODEOWNERS
 # Requires review from a senior engineer on any change to CI/CD,
 # Kubernetes, or infrastructure directories.
-# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
 # Global fallback — all files require at least one review
-*                           @REPLACE_GITHUB_ORG/platform-team
+*                           @papunpatra27-dot
 
 # Pipeline changes — require senior platform engineer sign-off
-.github/workflows/          @REPLACE_GITHUB_ORG/senior-platform-engineers
-.github/CODEOWNERS          @REPLACE_GITHUB_ORG/senior-platform-engineers
+.github/workflows/          @papunpatra27-dot
+.github/CODEOWNERS          @papunpatra27-dot
 
 # Kubernetes manifests — any change can break production
-k8s/                        @REPLACE_GITHUB_ORG/senior-platform-engineers
+k8s/                        @papunpatra27-dot
 
 # Infrastructure as Code — Terraform changes affect real cloud resources
-infrastructure/             @REPLACE_GITHUB_ORG/senior-platform-engineers
+infrastructure/             @papunpatra27-dot
 
 # SLO definitions — changes to thresholds must be reviewed
-slo/                        @REPLACE_GITHUB_ORG/senior-platform-engineers
+slo/                        @papunpatra27-dot
 
 # Application source — standard team review
-app/                        @REPLACE_GITHUB_ORG/platform-team
+app/                        @papunpatra27-dot
