@@ -27,7 +27,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
   security-events: write   # Upload SARIF to GitHub Security tab
   actions: read
   pull-requests: write
