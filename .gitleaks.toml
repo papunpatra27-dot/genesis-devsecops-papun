@@ -24,6 +24,7 @@ paths = [
 commits = [
   # Add specific commit SHAs here to allowlist individual commits
   # Example: "abc123def456"
+  "03ad748b61765ca2bc7d50eae2da1ebcb180c774",
 ]
 
 ##############################################################################
