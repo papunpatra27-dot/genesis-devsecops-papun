@@ -1,0 +1,381 @@
+================================================================================
+                    COMPLETE DEPLOYMENT SEQUENCE & CHANGES
+================================================================================
+
+================================================================================
+1. TERRAFORM APPLY — WHAT CHANGES HAPPEN
+================================================================================
+
+REGION: ap-south-2 (Mumbai)
+AWS ACCOUNT: 320644184091
+
+STEP 1 - NETWORKING:
+  ✓ VPC: 10.0.0.0/16 created in ap-south-2
+  ✓ Public subnets: 10.0.1.0/24 (ap-south-2a), 10.0.2.0/24 (ap-south-2b)
+  ✓ Private subnets: 10.0.101.0/24, 10.0.102.0/24
+  ✓ Internet Gateway: Attached to VPC
+  ✓ Route tables: 0.0.0.0/0 → IGW (public), private routes managed
+  ✓ Security Group (k3s-sg):
+    - Ingress SSH 22 (admin CIDR only)
+    - Ingress K8s API 6443 (admin CIDR only)
+    - Ingress HTTP 80 (0.0.0.0/0)
+    - Ingress HTTPS 443 (0.0.0.0/0)
+    - Ingress Kubelet 10250 (VPC CIDR)
+    - Ingress NodePort 30000-32767 (VPC CIDR)
+    - Egress: All outbound allowed
+  ✓ VPC Flow Logs → CloudWatch /genesis/dev with 7-day retention
+
+STEP 2 - IAM ROLES & POLICIES:
+  ✓ k3s EC2 Node Role (genesis-dev-k3s-node-role):
+    - ECR pull permissions (GetAuthorizationToken, BatchGetImage)
+    - CloudWatch Logs (CreateLogGroup, CreateLogStream, PutLogEvents)
+    - SSM Session Manager (AmazonSSMManagedInstanceCore)
+  ✓ GitHub Actions OIDC Provider: token.actions.githubusercontent.com
+  ✓ GitHub Actions Deployment Role:
+    - ECR push permissions (PutImage, InitiateLayerUpload)
+    - S3 state bucket access (GetObject, PutObject, ListBucket)
+    - DynamoDB state locking (GetItem, PutItem, DeleteItem)
+
+STEP 3 - ECR REGISTRY:
+  ✓ Repository: genesis-platform-api
+  ✓ Image tag immutability: IMMUTABLE (prevents tag overwrite)
+  ✓ Scan on push: ENABLED (Trivy automatic scanning)
+  ✓ Encryption: AES256
+  ✓ Lifecycle: Keep 5 tagged images, expire untagged after 1 day
+
+STEP 4 - EC2 COMPUTE:
+  ✓ Instance: t2.micro in public subnet
+  ✓ AMI: Amazon Linux 2023 (latest)
+  ✓ Root volume: 20GB gp3, encrypted EBS
+  ✓ IMDSv2: ENFORCED (required tokens)
+  ✓ Key pair: genesis-dev-k3s-key (SSH access)
+  ✓ Elastic IP: Static public IP for stable access
+  ✓ IAM instance profile: k3s node role attached
+  ✓ UserData: Runs userdata.sh.tpl on boot (installs k3s + Helm charts)
+
+STEP 5 - OBSERVABILITY:
+  ✓ CloudWatch log group: /genesis/dev
+  ✓ SNS topic: genesis-dev-alarms
+  ✓ CloudWatch alarm: EC2 CPU > 80% → SNS email notification
+
+TERRAFORM OUTPUTS to save:
+  - k3s_public_ip (Elastic IP address)
+  - ecr_repository_url (ECR registry URI)
+  - github_actions_role_arn (IAM role for GitHub Actions)
+
+
+================================================================================
+2. K3S YAML DEPLOYMENT — WHEN & WHAT CHANGES HAPPEN
+================================================================================
+
+TIMING:
+  1. Terraform apply completes
+  2. EC2 instance boots and runs userdata.sh.tpl (k3s + Helm charts installed)
+  3. Argo CD is running in cluster
+  4. kubectl/Argo CD access configured in GitHub Actions
+
+DEPLOYMENT FLOW:
+  A) Manual: kubectl apply -f k8s/argocd-app.yaml (Argo CD Application CRD)
+  B) Argo CD watches Git main branch k8s/ folder every 3 minutes (or webhook)
+  C) On Git commit, Argo CD syncs these resources in order:
+     → k8s/namespace.yaml (staging namespace)
+     → k8s/app-deployment.yaml (SA, RBAC, NetworkPolicy, PDB)
+     → k8s/service.yaml (3 Services + ServiceMonitor)
+     → k8s/ingress.yaml (NGINX Ingress for traffic)
+     → k8s/rollout.yaml (Argo Rollouts Rollout — the main workload)
+     → k8s/prometheus-rules.yaml (AnalysisTemplate for canary gate)
+
+NAMESPACE (k8s/namespace.yaml):
+  ✓ Name: staging
+  ✓ Labels: environment=staging, project=genesis, managed-by=argocd
+
+APP RESOURCES (k8s/app-deployment.yaml):
+  ✓ ServiceAccount: genesis-platform-api (no auto-mount of SA token)
+  ✓ Role: Empty (app doesn't call k8s API)
+  ✓ RoleBinding: SA → Role
+  ✓ NetworkPolicy:
+    - Ingress from ingress-nginx namespace on port 8000
+    - Ingress from monitoring namespace on port 8000
+    - Egress DNS only (UDP+TCP port 53)
+  ✓ PodDisruptionBudget: minAvailable=2 of 3 replicas
+
+SERVICES (k8s/service.yaml):
+  ✓ genesis-platform-api-stable: ClusterIP:80 → Pod:8000 (production)
+  ✓ genesis-platform-api-canary: ClusterIP:80 → Pod:8000 (canary traffic)
+  ✓ genesis-platform-api: ClusterIP (80 main, 8000 metrics)
+  ✓ ServiceMonitor: Prometheus scrapes /metrics every 15s
+
+INGRESS (k8s/ingress.yaml):
+  ✓ Stable Ingress: Routes / → genesis-platform-api-stable
+  ✓ Canary Ingress: Routes / with weight=0 (Argo Rollouts patches during rollout)
+  ✓ Requires: helm install ingress-nginx (NGINX Ingress Controller)
+
+ROLLOUT (k8s/rollout.yaml):
+  ✓ Replicas: 3
+  ✓ Image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-<git-sha>
+  ✓ SecurityContext:
+    - runAsNonRoot: true
+    - runAsUser: 1000
+    - fsGroup: 1000
+    - readOnlyRootFilesystem: true
+    - drop ALL capabilities
+  ✓ Resources: request 100m CPU/128Mi RAM, limit 250m/256Mi
+  ✓ Probes: GET /health (liveness 10s delay, readiness 5s delay)
+  ✓ Canary Strategy:
+    Step 1: Route 10% traffic to canary pods
+    Step 2: Pause 2 minutes
+    Step 3: Run AnalysisRun (Prometheus error rate gate)
+      - If error rate > 2%: ABORT (rollback)
+      - If error rate ≤ 2%: PROMOTE
+    Step 4: Route 25% traffic → pause 2 min
+    Step 5: Route 50% traffic
+    Step 6: Route 100% traffic (complete)
+
+PROMETHEUS RULES (k8s/prometheus-rules.yaml):
+  ✓ AnalysisTemplate: genesis-api-error-rate
+    - Query: rate(http_requests_total{status_code!="200"}[5m])
+    - Success threshold: ≤ 0.02 (2% error rate)
+    - Failure threshold: > 0.02 (2% error rate)
+
+
+================================================================================
+3. PYTHON APP DEPLOYMENT — WHEN & WHAT CHANGES HAPPEN
+================================================================================
+
+TIMING:
+  1. Developer creates PR with Python code changes
+  2. CI runs on PR (Stages 1-11)
+  3. PR merged to main → Deploy workflow triggered
+  4. Docker image built, pushed to ECR, k8s/rollout.yaml updated
+  5. Argo CD detects commit, applies updated rollout.yaml
+  6. Argo Rollouts executes canary deployment
+
+DEPLOYMENT FLOW:
+  A) Developer commits Python code → PR to main
+  B) GitHub Actions CI (Stages 1-11) runs:
+     - Gitleaks: Secret scanning
+     - pip-audit: Vulnerability scanning (requirements-prod.txt only)
+     - Semgrep: SAST code quality
+     - pytest: ≥75% coverage
+     - Docker build: Local build (no push)
+     - tflint: Terraform linting
+     - Checkov: IaC security
+     - Kyverno: K8s manifest validation
+  C) PR approved & merged to main
+  D) GitHub Actions Deploy (Stages 5-13) runs:
+     - Security gates re-run (must pass)
+     - Manual approval gate: Reviewer must click Approve
+     - docker buildx build & push to ECR with SHA tag (IMMUTABLE)
+     - Cosign keyless sign image
+     - Trivy scan ECR image (block if CRITICAL found)
+     - Generate SBOM
+  E) Update manifest: Python replaces image tag in k8s/rollout.yaml → git commit
+  F) Argo CD detects new commit
+  G) Argo CD applies updated rollout.yaml to cluster
+  H) Argo Rollouts starts canary: 10% → analysis → 25% → 50% → 100%
+  I) Smoke test: GET /health validates deployment
+
+IMAGE BUILD:
+  ✓ Dockerfile (app/Dockerfile) — multi-stage:
+    Stage 1 (builder): python:3.12-slim
+      - pip install -r requirements-prod.txt
+      - Copy app source code
+    Stage 2 (runtime): python:3.12-slim
+      - Copy only runtime from builder
+      - Non-root user: UID 1000
+      - Entrypoint: uvicorn main:app --host 0.0.0.0 --port 8000
+  ✓ Image tag: sha-<first 7 chars of git commit>
+  ✓ Registry: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api
+
+APP CODE (app/main.py):
+  ✓ Framework: FastAPI 0.115.5
+  ✓ Port: 8000
+  ✓ Endpoints:
+    - GET /health → {status: ok, version: 1.0.0, namespace: staging}
+    - POST /platform/units → Create unit (tenant_id, unit_id, status)
+    - GET /platform/units/{unit_id} → Retrieve unit
+  ✓ Prometheus metrics:
+    - http_requests_total (counter)
+    - http_request_duration_seconds (histogram)
+    - genesis_units_created_total (counter with tenant_id label)
+  ✓ Probes:
+    - Liveness: GET /health (10s delay, 15s period, 3 failures)
+    - Readiness: GET /health (5s delay, 10s period, 3 failures)
+
+CANARY EXECUTION:
+  1. Argo Rollouts receives updated rollout.yaml with new image SHA
+  2. Creates new ReplicaSet with 1 pod (canary version)
+  3. genesis-platform-api-canary Service selector → new pods
+  4. NGINX Ingress routes 10% of traffic to canary Service
+  5. Waits 2 minutes (observation window)
+  6. Runs AnalysisRun: Query Prometheus for error rate
+  7. Decision:
+     - If error rate > 2%: ABORT (scale canary to 0, keep stable)
+     - If error rate ≤ 2%: PROMOTE (continue to next step)
+  8. Repeat: 25% weight → pause → analysis → 50% weight → 100% weight
+  9. Final state: All 3 replicas running new image, old ReplicaSet scaled to 0
+
+
+================================================================================
+4. MANUAL TASKS REQUIRED (IN ORDER)
+================================================================================
+
+TASK 1 — Generate SSH Key Pair:
+  Command: ssh-keygen -t ed25519 -f ~/.ssh/genesis-k3s -C "genesis-k3s-node"
+  Action: Add public key to infrastructure/environments/dev/variables.tf (k3s_ssh_public_key)
+
+TASK 2 — Configure Terraform Variables:
+  Edit: infrastructure/environments/dev/variables.tf
+  Set:
+    - aws_region = "ap-south-2"
+    - vpc_cidr = "10.0.0.0/16"
+    - public_subnet_cidrs = ["10.0.1.0/24", "10.0.2.0/24"]
+    - private_subnet_cidrs = ["10.0.101.0/24", "10.0.102.0/24"]
+    - availability_zones = ["ap-south-2a", "ap-south-2b"]
+    - admin_cidr = "<your-public-ip>/32"
+    - alarm_email = "ops@example.com"
+    - k3s_ssh_public_key = "<public key from Task 1>"
+    - project = "genesis"
+    - environment = "dev"
+    - github_org = "papunpatra27-dot"
+    - github_repo = "genesis-devsecops-papun"
+
+TASK 3 — Create S3 Bucket for Terraform State:
+  Command: aws s3 mb s3://genesis-terraform-state-320644184091 --region ap-south-2
+  Command: aws s3api put-bucket-versioning --bucket genesis-terraform-state-320644184091 --versioning-configuration Status=Enabled
+
+TASK 4 — Create DynamoDB Table for State Locking:
+  Command: aws dynamodb create-table \
+             --table-name genesis-terraform-lock \
+             --attribute-definitions AttributeName=LockID,AttributeType=S \
+             --key-schema AttributeName=LockID,KeyType=HASH \
+             --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5 \
+             --region ap-south-2
+
+TASK 5 — Apply Terraform:
+  Commands:
+    cd infrastructure/environments/dev
+    terraform init \
+      -backend-config="bucket=genesis-terraform-state-320644184091" \
+      -backend-config="key=dev/terraform.tfstate" \
+      -backend-config="region=ap-south-2" \
+      -backend-config="dynamodb_table=genesis-terraform-lock"
+    terraform apply -var-file=variables.tf
+  Save outputs:
+    - k3s_public_ip
+    - ecr_repository_url
+    - github_actions_role_arn
+
+TASK 6 — Get k3s Kubeconfig:
+  Command: ssh -i ~/.ssh/genesis-k3s ec2-user@<k3s-public-ip> "sudo cat /etc/rancher/k3s/k3s.yaml"
+  Edit: Replace 127.0.0.1:6443 with <k3s-public-ip>:6443
+  Save: ~/.kube/config (base64 encode for Task 7)
+
+TASK 7 — Configure GitHub Secrets (repo → Settings → Secrets and Variables → Actions):
+  AWS_DEPLOY_ROLE_ARN: <from terraform output>
+  ARGOCD_SERVER: https://<k3s-public-ip>:30950
+  ARGOCD_PASSWORD: <kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d>
+  K3S_KUBECONFIG_B64: <base64 -w0 < ~/.kube/config>
+  K3S_PUBLIC_IP: <from terraform output>
+
+TASK 8 — Configure Argo CD Repo Credentials:
+  Command: kubectl create secret generic repo-creds \
+             --from-literal=username=<github-user> \
+             --from-literal=password=<github-pat> \
+             -n argocd
+
+TASK 9 — Configure GitHub Required Reviewer:
+  In GitHub: Settings → Environments → staging → Required Reviewers
+  Add: Your GitHub username or team
+  (This pauses GitHub Actions deploy at approval gate)
+
+TASK 10 — Install NGINX Ingress Controller:
+  Commands:
+    helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+    helm repo update
+    helm install ingress-nginx ingress-nginx/ingress-nginx \
+      --namespace ingress-nginx --create-namespace
+
+
+================================================================================
+5. COMPLETE ORDER OF OPERATIONS (TO MAKE EVERYTHING RUN)
+================================================================================
+
+PHASE 1 — PREREQUISITES (Manual):
+  ├─ Generate SSH key pair
+  ├─ Update Terraform variables
+  ├─ Create S3 bucket for state
+  ├─ Create DynamoDB table for locking
+  └─ Have AWS CLI configured with credentials
+
+PHASE 2 — INFRASTRUCTURE (terraform apply):
+  ├─ cd infrastructure/environments/dev
+  ├─ terraform init (with backend config)
+  ├─ terraform apply
+  ├─ Save k3s_public_ip, ecr_repository_url, github_actions_role_arn
+  └─ Wait for EC2 instance to boot + k3s to be ready (10 min)
+
+PHASE 3 — CLUSTER BOOTSTRAP (automatic via userdata.sh.tpl):
+  ├─ k3s installed
+  ├─ Helm charts installed (Argo CD, Argo Rollouts, Kyverno, Prometheus)
+  ├─ ECR credentials configured
+  └─ Cluster ready for kubectl access
+
+PHASE 4 — KUBERNETES SETUP (Manual + Argo CD):
+  ├─ Retrieve kubeconfig + setup kubectl
+  ├─ Get Argo CD admin password
+  ├─ Login to Argo CD Web UI (https://<k3s-public-ip>:30950)
+  ├─ Add GitHub private repo in Argo CD settings
+  ├─ Create repo credentials secret in argocd namespace
+  ├─ kubectl apply -f k8s/argocd-app.yaml
+  └─ Argo CD auto-syncs all k8s/ YAML files
+
+PHASE 5 — GITHUB CONFIGURATION (Manual):
+  ├─ Add AWS_DEPLOY_ROLE_ARN to GitHub Secrets
+  ├─ Add ARGOCD_SERVER, ARGOCD_PASSWORD to GitHub Secrets
+  ├─ Add K3S_KUBECONFIG_B64, K3S_PUBLIC_IP to GitHub Secrets
+  ├─ Configure required reviewer for staging environment
+  ├─ Install NGINX Ingress Controller helm chart
+  └─ Create GitHub PAT for Argo CD repo credentials
+
+PHASE 6 — APPLICATION DEPLOYMENT (Automatic via GitHub Actions):
+  ├─ Developer commits Python code → Creates PR
+  ├─ GitHub CI runs (Stages 1-11) — must pass
+  ├─ PR reviewed & merged to main
+  ├─ GitHub Deploy triggered:
+  │   ├─ Build image + push to ECR (SHA tag)
+  │   ├─ Cosign sign image
+  │   ├─ Trivy scan
+  │   ├─ Wait for reviewer approval (manual gate)
+  │   ├─ Update k8s/rollout.yaml with new image SHA
+  │   ├─ Git commit + push
+  │   ├─ Argo CD detects commit
+  │   ├─ Apply rollout.yaml to cluster
+  │   └─ Smoke test validates deployment
+  └─ Argo Rollouts executes canary: 10% → analysis → 25% → 50% → 100%
+
+PHASE 7 — VERIFICATION (Manual checks):
+  ├─ k3s kubectl get nodes → should be Ready
+  ├─ k3s kubectl get pods -A → all pods Running
+  ├─ k3s kubectl get svc -A → Services have cluster IPs
+  ├─ curl http://<k3s-public-ip>/health → {status: ok, namespace: staging}
+  ├─ Argo CD UI → genesis-platform-api synced + healthy
+  ├─ Prometheus → Scraping metrics from genesis-platform-api
+  ├─ Grafana → Dashboard showing canary traffic split
+  └─ CloudWatch → Application logs appearing in /genesis/dev log group
+
+
+================================================================================
+KEY VALUES (Already Updated in Codebase):
+================================================================================
+
+Region: ap-south-2 (Mumbai)
+Account ID: 320644184091
+
+Updated files with ap-south-2 and account ID:
+  ✓ infrastructure/environments/dev/main.tf (provider region)
+  ✓ infrastructure/environments/prod/main.tf
+  ✓ k8s/rollout.yaml (ECR URI)
+  ✓ .github/workflows/ci.yml (AWS_REGION)
+  ✓ .github/workflows/deploy.yml (AWS_REGION)
+  ✓ .github/workflows/terraform.yml (AWS_REGION)

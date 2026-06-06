@@ -1,0 +1,438 @@
+================================================================================
+                    END-TO-END DEPLOYMENT FLOW EXPLAINED
+================================================================================
+
+KEY CONCEPT:
+  Terraform creates AWS infrastructure (VPC, EC2, IAM, ECR)
+  EC2 UserData script automatically installs & configures k3s + Helm charts
+  K3s YAML files are deployed via Argo CD (NOT as Helm charts, just plain YAML)
+  Helm charts are only used for 3rd-party tools (Argo CD, Prometheus, etc)
+
+
+================================================================================
+STEP-BY-STEP FLOW
+================================================================================
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: TERRAFORM PROVISIONS AWS INFRASTRUCTURE (Manual command)           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+You run:
+  $ cd infrastructure/environments/dev
+  $ terraform init -backend-config=...
+  $ terraform apply
+
+Terraform creates:
+  ✓ VPC (10.0.0.0/16)
+  ✓ Subnets (public + private)
+  ✓ Internet Gateway
+  ✓ Security Groups
+  ✓ IAM Roles (for k3s EC2 node + GitHub Actions)
+  ✓ ECR Repository (genesis-platform-api)
+  ✓ EC2 Instance (t2.micro, Amazon Linux 2023)
+  ✓ Elastic IP
+  ✓ CloudWatch resources
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: EC2 BOOTS & RUNS USERDATA SCRIPT (Automatic - NO manual work)      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+When EC2 instance starts, Terraform passes UserData script: userdata.sh.tpl
+
+UserData script AUTOMATICALLY does:
+  ├─ dnf update + dnf install (git, curl, jq)
+  ├─ curl https://get.k3s.io | sh  ← Installs k3s (Kubernetes)
+  ├─ Waits for k3s to be ready (kubectl get nodes = Ready)
+  ├─ curl helm install script | bash  ← Installs Helm
+  ├─ helm repo add (argo, kyverno, prometheus)  ← Adds Helm repositories
+  ├─ helm install argocd argo/argo-cd --namespace argocd  ← Installs Argo CD
+  ├─ helm install argo-rollouts argo/argo-rollouts  ← Installs Argo Rollouts
+  ├─ helm install kyverno kyverno/kyverno  ← Installs Kyverno
+  ├─ helm install kube-prometheus-stack prometheus/...  ← Installs Prometheus
+  └─ aws ecr get-login-password... kubectl create secret  ← ECR credentials
+
+Timeline:
+  • EC2 boots: ~2 min
+  • k3s install: ~3 min
+  • Helm install (all 4 charts): ~5 min
+  • Total: ~10 min
+
+After userdata.sh.tpl finishes:
+  ✓ k3s cluster is RUNNING and READY
+  ✓ Argo CD is RUNNING (NodePort 30950)
+  ✓ Argo Rollouts is RUNNING
+  ✓ Kyverno is RUNNING
+  ✓ Prometheus + Grafana is RUNNING
+  ✓ ECR credentials configured
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 3: YOU CONFIGURE ARG CD TO WATCH GITHUB (Manual - 5 minutes)          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+You do:
+  1. SSH into EC2 instance
+     $ ssh -i ~/.ssh/genesis-k3s ec2-user@<k3s-public-ip>
+
+  2. Get k3s kubeconfig
+     $ sudo cat /etc/rancher/k3s/k3s.yaml
+     (save to ~/.kube/config, replace 127.0.0.1:6443 with actual IP)
+
+  3. Get Argo CD admin password
+     $ kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
+
+  4. Login to Argo CD Web UI
+     https://<k3s-public-ip>:30950
+     Username: admin
+     Password: <from step 3>
+
+  5. In Argo CD Web UI:
+     Settings → Repositories → Connect Repo
+     - URL: https://github.com/papunpatra27-dot/genesis-devsecops-papun.git
+     - Create secret with GitHub PAT (Personal Access Token)
+     - Click Connect
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 4: DEPLOY ARGO CD APPLICATION CRD (Manual - 1 minute)                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+You run:
+  $ kubectl apply -f k8s/argocd-app.yaml
+
+What this does:
+  Creates an Argo CD Application resource that says:
+  "Watch GitHub repo main branch k8s/ folder. When anything changes, sync it."
+
+argocd-app.yaml contains:
+  apiVersion: argoproj.io/v1alpha1
+  kind: Application
+  metadata:
+    name: genesis-platform-api
+    namespace: argocd
+  spec:
+    source:
+      repoURL: https://github.com/papunpatra27-dot/genesis-devsecops-papun.git
+      targetRevision: main
+      path: k8s
+    destination:
+      server: https://kubernetes.default.svc
+      namespace: staging
+    syncPolicy:
+      automated:
+        prune: true
+        selfHeal: true
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 5: ARGO CD AUTO-SYNCS K3S YAML FILES (Automatic)                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Once argocd-app.yaml is deployed, Argo CD:
+  1. Connects to GitHub every 3 minutes (or via webhook)
+  2. Reads k8s/ folder from main branch
+  3. Applies these files IN ORDER:
+     ├─ k8s/namespace.yaml (creates staging namespace)
+     ├─ k8s/app-deployment.yaml (creates SA, RBAC, NetworkPolicy, PDB)
+     ├─ k8s/service.yaml (creates 3 Services + ServiceMonitor)
+     ├─ k8s/ingress.yaml (creates Ingress resources)
+     ├─ k8s/rollout.yaml (creates Argo Rollouts Rollout)
+     └─ k8s/prometheus-rules.yaml (creates AnalysisTemplate)
+
+These are PLAIN YAML files, NOT Helm charts.
+They define Kubernetes native resources.
+
+After Argo CD syncs:
+  ✓ Namespace staging created
+  ✓ ServiceAccount genesis-platform-api created
+  ✓ Services created (stable, canary)
+  ✓ NGINX Ingress created
+  ✓ Argo Rollouts Rollout created (waiting for image tag)
+  ✓ Prometheus scraping configured
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 6: CONFIGURE GITHUB SECRETS (Manual - 5 minutes)                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+In GitHub repo → Settings → Secrets and Variables → Actions:
+
+Add these secrets:
+  AWS_DEPLOY_ROLE_ARN: arn:aws:iam::320644184091:role/genesis-dev-github-actions-role
+  ARGOCD_SERVER: https://<k3s-public-ip>:30950
+  ARGOCD_PASSWORD: <from Step 3>
+  K3S_KUBECONFIG_B64: <base64 encoded kubeconfig>
+  K3S_PUBLIC_IP: <terraform output k3s_public_ip>
+
+These allow GitHub Actions to:
+  ✓ Assume AWS role (push to ECR)
+  ✓ Login to Argo CD (trigger sync)
+  ✓ Access k3s cluster (verify deployment)
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 7: DEVELOPER COMMITS PYTHON CODE (Automatic CI)                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Developer does:
+  $ git commit -m "Add new endpoint"
+  $ git push origin feature-branch
+  $ Open PR to main
+
+GitHub Actions CI runs (Stages 1-11):
+  ├─ Gitleaks (secret scan)
+  ├─ pip-audit (vulnerability scan on requirements-prod.txt)
+  ├─ Semgrep (code quality)
+  ├─ pytest (≥75% coverage)
+  ├─ Docker build (local, NO push)
+  ├─ tflint (Terraform linting)
+  ├─ Checkov (Infrastructure security)
+  └─ Kyverno (Kubernetes manifest validation)
+
+If all pass: ✓ PR ready to merge
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 8: PR MERGED TO MAIN (Automatic Deploy)                               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+When PR is merged to main:
+  GitHub Actions Deploy workflow triggered (deploy.yml)
+
+Deploy workflow does:
+  1. Re-run security gates (Stages 1-4) — must pass
+  2. MANUAL APPROVAL GATE: Reviewer clicks Approve in GitHub UI
+  3. Build image:
+     docker buildx build \
+       --platform linux/amd64 \
+       --file app/Dockerfile \
+       --tag 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-abc1234 \
+       --push
+  4. Cosign keyless sign the image
+  5. Trivy scan ECR image
+  6. Generate SBOM
+  7. Python script updates k8s/rollout.yaml:
+     OLD: image: genesis-platform-api:REPLACE_GIT_SHA
+     NEW: image: genesis-platform-api:sha-abc1234
+  8. Commit updated rollout.yaml back to main
+  9. Git push to main
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 9: ARGO CD DETECTS GIT COMMIT (Automatic)                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Argo CD polls GitHub every 3 min (or via webhook):
+  1. Detects new commit to main (rollout.yaml changed)
+  2. Reads NEW k8s/rollout.yaml with updated image tag
+  3. Syncs the change to cluster:
+     kubectl apply -f k8s/rollout.yaml
+
+The only change in rollout.yaml:
+  spec.template.spec.containers[0].image = sha-abc1234
+
+When rollout.yaml is applied:
+  ✓ Argo Rollouts detects image change
+  ✓ Creates new ReplicaSet with 1 canary pod (new image)
+  ✓ Keeps old ReplicaSet (stable pods with old image)
+  ✓ Starts canary deployment strategy
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 10: ARGO ROLLOUTS CANARY EXECUTION (Automatic)                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Argo Rollouts controller watches the Rollout resource:
+
+Timeline:
+  T=0: Canary ReplicaSet created (1 pod with new image)
+       genesis-platform-api-canary Service points to canary pods
+       NGINX Ingress routes 10% traffic to canary Service
+       → 90% of users still on old version
+       → 10% of users on new version
+
+  T=2min: Pause over
+          AnalysisRun triggered: Query Prometheus
+          SELECT error_rate FROM last 5 minutes
+          
+          IF error_rate > 2%:
+            → ABORT (canary pod killed, rollback)
+            → All traffic back to stable
+          
+          IF error_rate ≤ 2%:
+            → PROMOTE to next step
+
+  T=2min+: Route 25% to canary (75% stable)
+           Pause 2 minutes again
+
+  T=4min+: Query Prometheus again
+           IF error_rate ≤ 2%:
+             → Route 50% to canary (50% stable)
+             → Pause 2 minutes
+
+  T=6min+: Query Prometheus again
+           IF error_rate ≤ 2%:
+             → Route 100% to canary
+             → Scale old ReplicaSet to 0
+             → Deployment complete ✓
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 11: SMOKE TEST & VERIFICATION                                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+After canary reaches 100%:
+  GitHub Actions smoke test runs:
+    curl http://<k3s-public-ip>/health
+    
+    Expected response:
+    {
+      "status": "ok",
+      "version": "1.0.0",
+      "namespace": "staging"
+    }
+
+    If HTTP 200 + correct response: ✓ Deployment successful
+    If error: ✗ Deployment failed
+
+
+================================================================================
+SUMMARY: WHAT RUNS AUTOMATICALLY vs MANUAL
+================================================================================
+
+AUTOMATIC (No manual work):
+  ✓ Terraform apply → EC2 boots
+  ✓ UserData script → k3s + Helm charts install
+  ✓ GitHub Actions CI → Runs on every PR
+  ✓ GitHub Actions Deploy → Runs on push to main (after manual approval)
+  ✓ Argo CD → Polls GitHub, syncs k8s files
+  ✓ Argo Rollouts → Canary deployment strategy
+  ✓ Prometheus → Analysis gate (auto-rollback if errors > 2%)
+  ✓ Smoke test → Validates deployment
+
+MANUAL (Required user actions):
+  1. Generate SSH key
+  2. Configure Terraform variables
+  3. Run: terraform init + terraform apply
+  4. Wait ~10 min for k3s to boot
+  5. SSH into EC2, get kubeconfig + Argo CD password
+  6. Login to Argo CD Web UI, add GitHub repo
+  7. kubectl apply -f k8s/argocd-app.yaml
+  8. Configure GitHub Secrets (6 secrets)
+  9. Configure required reviewer (GitHub)
+  10. Install NGINX Ingress Controller (helm install)
+  11. Click Approve in GitHub Actions (for each deployment)
+
+
+================================================================================
+WHY K3S YAML FILES ARE NOT HELM CHARTS
+================================================================================
+
+K3s YAML files (k8s/namespace.yaml, k8s/service.yaml, etc):
+  • These are KUBERNETES NATIVE resources (Namespace, Service, Deployment)
+  • They define YOUR APPLICATION infrastructure
+  • Managed by Argo CD (GitOps)
+  • Simple YAML, no templating needed
+  • Applied directly via kubectl
+
+Helm charts (used in userdata.sh.tpl):
+  • Argo CD, Argo Rollouts, Prometheus, Kyverno
+  • These are 3RD-PARTY tools
+  • Helm packages them with values/templates
+  • Installed via: helm install chart-name repo/chart-name
+
+Why the difference?
+  • K3s YAMLs: Simple, static, application-specific → plain YAML
+  • Helm charts: Complex tools, many config options → Helm for flexibility
+
+
+================================================================================
+HOW EC2 + K3S SETUP WORKS
+================================================================================
+
+Flow:
+  1. Terraform code:
+     resource "aws_instance" "k3s" {
+       user_data = templatefile("userdata.sh.tpl", {...})
+     }
+
+  2. Terraform applies → EC2 created
+
+  3. EC2 boots → Runs userdata.sh.tpl:
+     curl https://get.k3s.io | sh
+     (This installs k3s)
+
+  4. UserData also runs Helm charts:
+     helm install argocd argo/argo-cd
+     helm install argo-rollouts argo/argo-rollouts
+     helm install kyverno kyverno/kyverno
+     helm install prometheus prometheus/kube-prometheus-stack
+
+  5. After userdata finishes:
+     • k3s cluster is running
+     • Argo CD is running
+     • Prometheus is running
+     • Ready for kubectl commands
+
+  6. You SSH in and configure Argo CD to watch GitHub
+
+  7. You deploy Argo CD Application CRD that syncs k8s/ files
+
+  8. Every time you update k8s/rollout.yaml (via GitHub Actions),
+     Argo CD auto-syncs it
+
+
+================================================================================
+REAL EXAMPLE: What happens when you push code
+================================================================================
+
+Day 1, 10:00 AM:
+  Developer: git commit -m "Add POST /items endpoint"
+  Developer: git push origin feature-branch
+  Developer: Opens PR to main
+
+  GitHub Actions CI runs automatically:
+    ✓ Gitleaks pass
+    ✓ pip-audit pass
+    ✓ Semgrep pass
+    ✓ pytest pass
+    ✓ Docker build pass
+    ✓ tflint pass
+    → PR marked as ready to merge
+
+Day 1, 10:30 AM:
+  Code reviewer: "Looks good!" (approves PR)
+  Developer: Merges PR to main
+
+  GitHub Actions Deploy triggered:
+    ✓ Security gates re-run (Stages 1-4 pass)
+    → Pauses at "build-sign-push" waiting for manual approval
+    
+Day 1, 10:35 AM:
+  GitHub Actions UI: "Review required by @reviewer"
+  Required reviewer: Clicks "Approve" button
+
+Day 1, 10:36 AM:
+  GitHub Actions continues:
+    ✓ docker buildx build → 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-abc1234
+    ✓ Cosign sign image
+    ✓ Trivy scan pass
+    ✓ SBOM generated
+    ✓ Python updates k8s/rollout.yaml (sha-abc1234)
+    ✓ Git commit + push to main
+
+Day 1, 10:37 AM:
+  Argo CD detects new commit
+  Argo CD syncs updated k8s/rollout.yaml
+  Argo Rollouts sees image change
+
+Day 1, 10:37-10:45 AM:
+  Canary deployment: 10% → pause 2m → analysis → 25% → 50% → 100%
+  During each step, Prometheus measures error rate
+
+Day 1, 10:46 AM:
+  Deployment complete ✓
+  Smoke test: curl /health → 200 OK
+  GitHub Actions: Deploy successful ✓
+  All users now on new version with POST /items endpoint
