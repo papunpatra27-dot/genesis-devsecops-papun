@@ -125,9 +125,13 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const plan = fs.readFileSync(
-              `${process.env.TF_WORKING_DIR}/tfplan.txt`, 'utf8'
-            );
+            let plan = '';
+            const planPath = `${process.env.TF_WORKING_DIR}/tfplan.txt`;
+            if (fs.existsSync(planPath)) {
+              plan = fs.readFileSync(planPath, 'utf8');
+            } else {
+              plan = '(plan file not found — see workflow logs)';
+            }
             const maxLen = 50000;
             const truncated = plan.length > maxLen
               ? plan.slice(0, maxLen) + '\n\n... (truncated — see workflow logs)'
