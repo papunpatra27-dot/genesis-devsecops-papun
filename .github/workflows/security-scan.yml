@@ -63,30 +63,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install pip-audit packaging
 
-      - name: Run pip-audit
+      - name: Run pip-audit (runtime deps)
         run: |
           pip-audit \
-            -r app/requirements.txt \
+            -r app/requirements-prod.txt \
             --format=json \
             --output=reports/pip-audit.json \
             --desc || true
         continue-on-error: true
 
-      - name: Run auto-update for vulnerable deps
+      - name: Run auto-update for vulnerable runtime deps
         id: update-deps
         run: |
-          python scripts/auto_update_requirements.py reports/pip-audit.json app/requirements.txt > update-result.txt || true
-          CHANGED=$(cat update-result.txt | tr -d '\r\n')
-          echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+          python scripts/auto_update_requirements.py reports/pip-audit.json app/requirements-prod.txt > update-result-prod.txt || true
+          PROD_CHANGED=$(cat update-result-prod.txt | tr -d '\r\n')
+          echo "prod_changed=${PROD_CHANGED}" >> "$GITHUB_OUTPUT"
+          # Propagate fixes to main requirements file (only updates packages present in prod scan)
+          python scripts/auto_update_requirements.py reports/pip-audit.json app/requirements.txt > update-result-app.txt || true
+          APP_CHANGED=$(cat update-result-app.txt | tr -d '\r\n')
+          echo "app_changed=${APP_CHANGED}" >> "$GITHUB_OUTPUT"
 
       - name: Commit dependency fixes
-        if: steps.update-deps.outputs.changed == 'true'
+        if: steps.update-deps.outputs.prod_changed == 'true' || steps.update-deps.outputs.app_changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b deps-fixes-${{ github.sha }}
-          git add app/requirements.txt
-          git commit -m "chore(deps): auto-update vulnerable Python packages per pip-audit"
+          git add app/requirements-prod.txt app/requirements.txt
+          git commit -m "chore(deps): auto-update vulnerable runtime Python packages per pip-audit"
           git push origin deps-fixes-${{ github.sha }}
 
       - name: Upload pip-audit report
@@ -113,16 +117,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Semgrep
-        uses: returntocorp/semgrep-action@v1
-        with:
-          config: >-
-            p/python
-            p/owasp-top-ten
-            p/secrets
-          args: '--sarif --output=semgrep.sarif'
+      - name: Run Semgrep (CLI)
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+          semgrep scan --config "p/python,p/owasp-top-ten,p/secrets" --sarif --output=semgrep.sarif
         env:
           SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        continue-on-error: false
 
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
