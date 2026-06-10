@@ -1,0 +1,66 @@
+##############################################################################
+# Policy 3 — ecr-only-images
+# All container images must originate from the project's ECR registry.
+# Images from Docker Hub, public.ecr.aws, gcr.io, or quay.io are rejected.
+# Mode: Enforce — non-ECR images blocked at admission.
+#
+# Replace 320644184091 with your AWS account ID (12 digits).
+##############################################################################
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: ecr-only-images
+  annotations:
+    policies.kyverno.io/title: ECR Only Images
+    policies.kyverno.io/category: Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Pulling images from arbitrary public registries exposes the cluster to
+      supply-chain attacks. This policy restricts all pod images to the
+      project ECR registry so that only images that have passed the CI
+      pipeline (Trivy scan, SBOM, Cosign signature) can be scheduled.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-container-images-from-ecr
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - staging
+                - production
+      validate:
+        message: >-
+          Images must be pulled from the project ECR registry
+          (320644184091.dkr.ecr.ap-south-2.amazonaws.com).
+          Public registry images (Docker Hub, gcr.io, quay.io) are not
+          permitted in staging or production namespaces.
+        foreach:
+          - list: "request.object.spec.containers"
+            pattern:
+              image: "320644184091.dkr.ecr.ap-south-2.amazonaws.com/*"
+    - name: check-init-container-images-from-ecr
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - staging
+                - production
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.initContainers[] | length(@) }}"
+            operator: GreaterThanOrEquals
+            value: 1
+      validate:
+        message: >-
+          Init-container images must come from the project ECR registry.
+        foreach:
+          - list: "request.object.spec.initContainers"
+            pattern:
+              image: "320644184091.dkr.ecr.ap-south-2.amazonaws.com/*"
+

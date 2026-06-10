@@ -1,0 +1,168 @@
+##############################################################################
+# k8s/app-deployment.yaml
+#
+# Supporting Kubernetes resources for the genesis-platform-api.
+#
+# IMPORTANT: The actual workload is defined in k8s/rollout.yaml (Argo Rollouts
+# Rollout resource), which REPLACES a standard Deployment. This file provides
+# the supporting resources that rollout.yaml depends on:
+#
+#   1. Namespace       — staging (if not created by Argo CD syncOptions)
+#   2. ServiceAccount  — genesis-platform-api (referenced by rollout.yaml)
+#   3. Role            — least-privilege pod-level RBAC
+#   4. RoleBinding     — binds Role to the ServiceAccount
+#   5. NetworkPolicy   — restrict ingress to NGINX ingress controller only
+#   6. PodDisruptionBudget — ensure at least 1 pod stays up during maintenance
+#
+# Apply order (Argo CD handles this automatically via ServerSideApply):
+#   1. This file  → creates SA, RBAC, NetworkPolicy
+#   2. rollout.yaml → Rollout references the SA and can schedule pods
+#   3. service.yaml → Services route traffic to Rollout pods
+##############################################################################
+
+---
+##############################################################################
+# 1. Namespace — staging
+##############################################################################
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    environment: staging
+    project: genesis
+    # Kyverno ecr-only-images policy is scoped to this namespace
+    # Kyverno no-root-containers and require-resource-limits also enforce here
+
+---
+##############################################################################
+# 2. ServiceAccount — used by the Rollout pods
+#    rollout.yaml: spec.template.spec.serviceAccountName: genesis-platform-api
+##############################################################################
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+    environment: staging
+    project: genesis
+  annotations:
+    # If using IRSA (IAM Roles for Service Accounts) in future:
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/genesis-platform-api-role
+    description: "Service account for the genesis-platform-api Rollout pods"
+automountServiceAccountToken: false   # Not required — app does not call k8s API
+
+---
+##############################################################################
+# 3. Role — minimal permissions for the API pods
+#    The app does not call the Kubernetes API, so this role grants nothing.
+#    It exists for completeness (RBAC audit trail) and future expansion.
+##############################################################################
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+rules:
+  # No API access needed — application is stateless and does not query k8s API.
+  # This empty rule set is intentional: least-privilege means zero permissions
+  # when zero permissions are needed.
+  []
+
+---
+##############################################################################
+# 4. RoleBinding — binds the Role to the ServiceAccount
+##############################################################################
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+subjects:
+  - kind: ServiceAccount
+    name: genesis-platform-api
+    namespace: staging
+roleRef:
+  kind: Role
+  name: genesis-platform-api
+  apiGroup: rbac.authorization.k8s.io
+
+---
+##############################################################################
+# 5. NetworkPolicy — restrict traffic to the app pods
+#    Ingress: only from NGINX ingress controller namespace
+#    Egress:  allow DNS + Prometheus scraping; block all other egress
+##############################################################################
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+spec:
+  podSelector:
+    matchLabels:
+      app: genesis-platform-api
+
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Allow traffic from NGINX ingress controller
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+
+    # Allow Prometheus scraping from monitoring namespace
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+
+  egress:
+    # Allow DNS resolution (required for all pods)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+---
+##############################################################################
+# 6. PodDisruptionBudget — ensure availability during node maintenance
+#    With 3 replicas in rollout.yaml, minAvailable: 2 ensures at least 2
+#    pods remain running during voluntary disruptions (k3s upgrades, etc.)
+##############################################################################
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: genesis-platform-api
+  namespace: staging
+  labels:
+    app.kubernetes.io/name: genesis-platform-api
+    app.kubernetes.io/managed-by: argocd
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: genesis-platform-api

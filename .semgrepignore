@@ -1,0 +1,4 @@
+# Ignore intentional demo artifacts that are scanned by Semgrep for teaching/demo purposes
+app/flaws/*
+k8s/flawed-deployment.yaml
+infrastructure/conftest-policies/test/compliant_deployment.yaml

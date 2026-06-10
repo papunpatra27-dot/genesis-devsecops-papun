@@ -1,0 +1,518 @@
+================================================================================
+                  ANSWERS TO YOUR ARCHITECTURE QUESTIONS
+================================================================================
+
+================================================================================
+Q1: WHERE IS userdata.sh.tpl? HOW? WHERE IS SETUP/CODE?
+================================================================================
+
+LOCATION:
+  File: infrastructure/modules/compute/userdata.sh.tpl
+  
+  In Terraform:
+  resource "aws_instance" "k3s" {
+    user_data = templatefile("${path.module}/userdata.sh.tpl", {
+      project     = var.project
+      environment = var.environment
+      aws_region  = var.aws_region
+      ecr_registry = var.ecr_registry
+    })
+  }
+
+HOW IT WORKS:
+  1. Terraform reads userdata.sh.tpl
+  2. Replaces variables: ${project}, ${environment}, ${aws_region}, ${ecr_registry}
+  3. Passes the script to EC2 as UserData
+  4. When EC2 boots, the script runs AUTOMATICALLY (root privilege)
+  5. Script installs k3s + Helm charts
+
+WHERE:
+  infrastructure/modules/compute/userdata.sh.tpl
+
+CONTENT (Already in the file):
+  #!/bin/bash
+  dnf update -y
+  dnf install -y git curl unzip jq
+  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable traefik" sh -
+  (waits for k3s to be ready)
+  curl helm install script | bash
+  helm repo add argo kyverno prometheus
+  helm install argocd argo/argo-cd --namespace argocd --wait
+  helm install argo-rollouts argo/argo-rollouts --namespace argo-rollouts --wait
+  helm install kyverno kyverno/kyverno --namespace kyverno --wait
+  helm install kube-prometheus-stack prometheus/kube-prometheus-stack --wait
+  (creates ECR credentials)
+
+NO MANUAL SETUP NEEDED:
+  ✓ All code is already there
+  ✓ You just run: terraform apply
+  ✓ Everything installs automatically
+
+
+================================================================================
+Q2: DOES THE INSTRUCTION SAY TO USE HELM CHART?
+================================================================================
+
+YES, the instruction.md explicitly states:
+
+"In-cluster: Argo CD, Argo Rollouts, Kyverno, Prometheus, Grafana, Loki
+All open-source, deployed via Helm to k3s. Zero cost."
+
+And:
+
+"k3s setup note: Install k3s on your EC2 t2.micro with a single command:
+curl -sfL https://get.k3s.io | sh -. 
+Argo CD and Kyverno install via Helm in under 15 minutes."
+
+So yes, Helm charts ARE used for:
+  ✓ Argo CD (helm install argocd argo/argo-cd)
+  ✓ Argo Rollouts (helm install argo-rollouts argo/argo-rollouts)
+  ✓ Kyverno (helm install kyverno kyverno/kyverno)
+  ✓ Prometheus (helm install kube-prometheus-stack prometheus/...)
+
+But NOT for your application (k8s/ YAML files).
+
+
+================================================================================
+Q3: WHY MANUAL WORK NEEDED WHEN WE HAVE PIPELINE & K3S YAML?
+================================================================================
+
+EXCELLENT QUESTION! This is the key misunderstanding.
+
+The manual work is NOT for deploying infrastructure.
+The manual work is for CONFIGURING Argo CD to WATCH GitHub.
+
+AUTOMATIC (Terraform + UserData):
+  ✓ Create EC2 + k3s + Helm charts
+  ✓ Argo CD is installed and running
+  → After this, Argo CD sits idle, not watching anything
+
+MANUAL (You configure Argo CD):
+  ✓ SSH into EC2
+  ✓ Get Argo CD password
+  ✓ Login to Argo CD Web UI
+  ✓ Add GitHub repository credentials
+  ✓ Tell Argo CD: "Watch GitHub, apply k8s/ files"
+  → After this, Argo CD starts watching automatically
+
+THEN AUTOMATIC AGAIN:
+  ✓ GitHub Actions CI/CD runs (automated)
+  ✓ Argo CD syncs on every commit (automated)
+  ✓ Argo Rollouts deploys canary (automated)
+
+WHY CAN'T TERRAFORM DO THIS?
+  Terraform can't authenticate to GitHub and store secrets securely.
+  Argo CD needs credentials (GitHub PAT) to access private repo.
+  These credentials are SECRETS that must be created in k8s cluster.
+  You can't include them in Terraform.
+
+SO THE FLOW IS:
+  1. Terraform creates infrastructure (automated)
+  2. UserData installs k3s + Argo CD (automated)
+  3. YOU configure Argo CD to watch GitHub (manual, 5 minutes)
+  4. After that, EVERYTHING is automated (commits → deploy)
+
+ANALOGY:
+  Terraform = Delivering a parcel to your house (automated)
+  Manual step = Opening the parcel and setting it up (manual)
+  After setup = Parcel works on its own (automated)
+
+
+================================================================================
+Q4: HOW DOES TRAFFIC FLOW AND RELATED STUFF WORK?
+================================================================================
+
+COMPLETE TRAFFIC FLOW END-TO-END:
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 1: USER BROWSER → EC2 PUBLIC IP                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+User in browser:
+  https://<k3s-public-ip>/health
+  
+Where is <k3s-public-ip>?
+  Elastic IP address (static) assigned to EC2 instance
+  Example: 13.201.123.45
+  
+Source: Terraform output "k3s_public_ip"
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 2: EC2 SECURITY GROUP ALLOWS TRAFFIC                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Traffic arrives at EC2 instance:
+
+EC2 Security Group (created by Terraform):
+  ✓ Ingress HTTP 80: allowed (0.0.0.0/0)
+  ✓ Ingress HTTPS 443: allowed (0.0.0.0/0)
+  ✓ Ingress SSH 22: allowed (only from admin CIDR)
+  ✓ Ingress Kubernetes API 6443: allowed (only from admin CIDR)
+  ✓ Egress: all allowed
+  
+Your traffic on port 80 is allowed ✓
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 3: K3S NETWORKING (EC2 OS level)                                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+k3s is installed on EC2 OS.
+Traffic arrives at EC2 OS on port 80.
+
+k3s has an internal pod network (typically 10.42.0.0/16).
+
+But pods are inside k3s, not directly on OS.
+Traffic on port 80 needs to reach:
+  • NGINX Ingress Controller (listening on port 80 of the NODE)
+  • Which is a pod running inside k3s
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 4: NGINX INGRESS CONTROLLER RECEIVES TRAFFIC                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+NGINX Ingress Controller pod:
+  Namespace: ingress-nginx
+  Listens on: port 80 of the EC2 node
+  
+NGINX Ingress resource (k8s/ingress.yaml):
+  apiVersion: networking.k8s.io/v1
+  kind: Ingress
+  metadata:
+    name: genesis-platform-api
+    namespace: staging
+  spec:
+    ingressClassName: nginx
+    rules:
+      - http:
+          paths:
+            - path: /
+              pathType: Prefix
+              backend:
+                service:
+                  name: genesis-platform-api-stable
+                  port:
+                    number: 80
+
+NGINX sees:
+  • Request for /health
+  • Routes to Service: genesis-platform-api-stable on port 80
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 5: SERVICE ROUTES TO POD                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Service (created from k8s/service.yaml):
+  apiVersion: v1
+  kind: Service
+  metadata:
+    name: genesis-platform-api-stable
+    namespace: staging
+  spec:
+    selector:
+      app: genesis-platform-api
+    ports:
+      - port: 80
+        targetPort: 8000
+    type: ClusterIP
+
+What does this do?
+  1. Selector: app: genesis-platform-api
+     → Finds all pods with label app=genesis-platform-api
+  
+  2. Port mapping: 80 → 8000
+     → External port 80 → Pod internal port 8000
+  
+  3. Type: ClusterIP
+     → Internal service (only accessible inside cluster)
+     → NGINX accesses it via: genesis-platform-api-stable.staging.svc.cluster.local:80
+
+The Service discovers pods using selector.
+Pods have labels: app=genesis-platform-api (from Rollout resource)
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 6: POD RECEIVES TRAFFIC ON PORT 8000                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Pod running image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-xyz
+
+Container inside pod:
+  Port 8000: Running FastAPI app (uvicorn)
+  
+Container receives request:
+  GET /health
+  
+App processes request (app/main.py):
+  @app.get("/health")
+  async def health_check():
+    return {
+      "status": "ok",
+      "version": "1.0.0",
+      "namespace": K8S_NAMESPACE  # Set via env var
+    }
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ STEP 7: RESPONSE BACK TO USER                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+Response travels back:
+  Pod (8000) ← Service (80) ← NGINX Ingress (80) ← EC2 OS (80) ← User browser
+
+Response:
+  HTTP 200 OK
+  {
+    "status": "ok",
+    "version": "1.0.0",
+    "namespace": "staging"
+  }
+
+
+================================================================================
+TRAFFIC FLOW DURING CANARY DEPLOYMENT
+================================================================================
+
+When Argo Rollouts executes canary, traffic is split:
+
+BEFORE CANARY:
+  All traffic → Service (genesis-platform-api-stable) → Old pods
+
+DURING CANARY (10% step):
+  90% traffic → Service (genesis-platform-api-stable) → Old pods (ReplicaSet-1)
+  10% traffic → Service (genesis-platform-api-canary) → New pods (ReplicaSet-2)
+
+How?
+  NGINX Ingress has TWO routes:
+  
+  Route 1 (stable):
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: genesis-platform-api
+    spec:
+      backend:
+        service:
+          name: genesis-platform-api-stable
+  
+  Route 2 (canary, with weight):
+    apiVersion: networking.k8s.io/v1
+    kind: Ingress
+    metadata:
+      name: genesis-platform-api-canary
+      annotations:
+        nginx.ingress.kubernetes.io/canary: "true"
+        nginx.ingress.kubernetes.io/canary-weight: "10"
+    spec:
+      backend:
+        service:
+          name: genesis-platform-api-canary
+
+Argo Rollouts PATCHES these annotations during rollout:
+  canary-weight: "10" → "25" → "50" → "100"
+
+
+================================================================================
+COMPLETE TRAFFIC ROUTING CHAIN
+================================================================================
+
+Internet:
+  User browser (13.201.123.45:80) → GET /health
+
+EC2 OS (Operating System level):
+  Network interface receives packet on port 80
+  ↓
+
+EC2 Security Group:
+  Rule: Ingress HTTP 80 from 0.0.0.0/0 ✓ ALLOWED
+  ↓
+
+k3s Node Networking:
+  k3s (host network mode) listens on port 80
+  ↓
+
+NGINX Ingress Pod (Port 80):
+  Pod ID: ingress-nginx-controller-abc123xyz
+  Running in: ingress-nginx namespace
+  Listens on: Node port 80 (via hostPort: 80)
+  ↓
+
+NGINX configuration:
+  server_name _;
+  listen 80;
+  location / {
+    upstream stable {
+      server genesis-platform-api-stable.staging.svc.cluster.local:80;
+    }
+    upstream canary {
+      server genesis-platform-api-canary.staging.svc.cluster.local:80;
+    }
+    if (canary_weight matches) {
+      proxy_pass http://canary;
+    } else {
+      proxy_pass http://stable;
+    }
+  }
+  ↓
+
+Service (genesis-platform-api-stable, ClusterIP:80):
+  selector: app=genesis-platform-api
+  port: 80 → targetPort: 8000
+  ↓
+
+Kubernetes Endpoint Discovery:
+  k8s finds pods with label app=genesis-platform-api
+  Gets pod IPs: 10.42.1.5, 10.42.1.6, 10.42.1.7
+  (from ReplicaSet: stable)
+  ↓
+
+Pod (10.42.1.5:8000):
+  Container running: FastAPI app
+  Port 8000: uvicorn main:app --host 0.0.0.0 --port 8000
+  ↓
+
+FastAPI Application:
+  @app.get("/health")
+  async def health_check():
+    return {"status": "ok", "version": "1.0.0", "namespace": "staging"}
+  ↓
+
+Response returned same path back:
+  Pod (10.42.1.5:8000) → Service (10.96.0.1:80) → NGINX (13.201.123.45:80) → Browser
+
+
+================================================================================
+NETWORK ISOLATION & SECURITY
+================================================================================
+
+NetworkPolicy (from k8s/app-deployment.yaml):
+
+INGRESS (Who can send traffic TO the app pods):
+  ✓ Namespace: ingress-nginx (port 80)
+    → NGINX Ingress Controller
+  ✓ Namespace: monitoring (port 80)
+    → Prometheus scraping /metrics
+  ✗ Everything else is BLOCKED
+
+EGRESS (Where pods can send traffic FROM):
+  ✓ UDP 53, TCP 53 (DNS)
+    → Pod can resolve names
+  ✗ Everything else is BLOCKED
+    → Pod cannot make outbound connections (e.g., to external APIs)
+
+This is SECURITY by default:
+  • Only ingress-nginx and prometheus can reach app pods
+  • App pods cannot reach outside world (unless explicitly allowed)
+
+
+================================================================================
+DNS RESOLUTION
+================================================================================
+
+Inside k3s cluster:
+
+When NGINX tries to reach:
+  genesis-platform-api-stable.staging.svc.cluster.local
+
+Kubernetes DNS (CoreDNS) resolves:
+  staging = namespace
+  svc = service
+  cluster.local = cluster domain
+  
+  → Resolves to Service ClusterIP: 10.96.0.1 (example)
+
+Service ClusterIP is a VIRTUAL IP:
+  • Not a real pod
+  • kube-proxy intercepts traffic to this IP
+  • Redirects to pod IPs (10.42.1.5, 10.42.1.6, etc)
+  • Load balances across all pods
+
+
+================================================================================
+INFRASTRUCTURE TAGS & RESOURCE TRACKING
+================================================================================
+
+Every AWS resource has tags (from Terraform):
+
+Example EC2 instance tags:
+  Project: genesis
+  Environment: dev
+  ManagedBy: terraform
+  Owner: DevOps Team
+
+These tags help with:
+  ✓ Cost allocation
+  ✓ Resource tracking
+  ✓ Automation (e.g., find all prod resources)
+  ✓ Compliance (e.g., find all unmanaged resources)
+
+
+================================================================================
+CIDR BLOCKS & IP ADDRESSING
+================================================================================
+
+VPC CIDR: 10.0.0.0/16 (65,536 IPs)
+  ├─ Public subnet 1: 10.0.1.0/24 (256 IPs)
+  │   └─ EC2 instance (gets 1 IP, rest available)
+  ├─ Public subnet 2: 10.0.2.0/24 (256 IPs)
+  ├─ Private subnet 1: 10.0.101.0/24 (256 IPs)
+  └─ Private subnet 2: 10.0.102.0/24 (256 IPs)
+
+k3s Pod Network (inside Kubernetes): 10.42.0.0/16
+  └─ Pods get IPs from this range (not from VPC)
+
+k3s Service Network: 10.43.0.0/16
+  └─ Services get IPs from this range (virtual only)
+
+These are SEPARATE networks managed by k3s CNI.
+
+
+================================================================================
+PROMETHEUS METRICS SCRAPING (Traffic for monitoring)
+================================================================================
+
+Prometheus pod (in monitoring namespace) periodically scrapes:
+
+GET http://genesis-platform-api.staging.svc.cluster.local:8000/metrics
+
+App exposes metrics on port 8000:
+  # HELP http_requests_total Total HTTP request count
+  # TYPE http_requests_total counter
+  http_requests_total{method="GET",endpoint="/health",status_code="200"} 42.0
+
+NetworkPolicy ALLOWS:
+  Ingress from monitoring namespace on port 8000 ✓
+
+Without this rule, Prometheus couldn't scrape metrics (blocked by NetworkPolicy).
+
+
+================================================================================
+SUMMARY: LAYERS OF NETWORKING
+================================================================================
+
+Layer 1 - Internet to EC2:
+  User IP → EC2 Elastic IP (13.201.123.45)
+  Handled by: EC2 Security Group
+
+Layer 2 - EC2 OS to NGINX:
+  EC2 port 80 (OS level) → NGINX pod port 80 (inside k3s)
+  Handled by: k3s node networking, hostPort
+
+Layer 3 - NGINX to Service:
+  NGINX → Service DNS (genesis-platform-api-stable.staging.svc.cluster.local:80)
+  Handled by: Kubernetes Service, CoreDNS
+
+Layer 4 - Service to Pod:
+  Service ClusterIP → Pod IP (10.42.1.5:8000)
+  Handled by: kube-proxy, iptables rules
+
+Layer 5 - Pod to Application:
+  Pod network interface → Container port 8000 (FastAPI)
+  Handled by: Container networking, docker bridge
+
+SecurityPolicy is enforced at:
+  Layer 3: NetworkPolicy blocks unauthorized ingress/egress
+  Layer 1: Security Group blocks at OS level

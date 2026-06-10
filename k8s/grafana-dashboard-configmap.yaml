@@ -1,0 +1,153 @@
+##############################################################################
+# k8s/grafana-dashboard-configmap.yaml
+# Grafana dashboard as a Kubernetes ConfigMap.
+# kube-prometheus-stack sidecar picks this up automatically when the
+# label sidecar.grafana/dashboard: "1" is present.
+#
+# All 6 required panels are included:
+#   1. HTTP request rate by endpoint and status-code family
+#   2. Error rate % (SLI — same PromQL as canary gate)
+#   3. Request latency P50 and P99
+#   4. Pod CPU and memory actual vs limit
+#   5. Canary vs stable traffic split (live during rollouts)
+#   6. genesis_units_created_total by tenant_id (custom counter)
+##############################################################################
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: genesis-platform-api-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"   # Picked up by the Grafana sidecar
+data:
+  genesis-platform-api.json: |
+    {
+      "title": "Genesis Platform API",
+      "uid": "genesis-platform-api",
+      "tags": ["genesis", "slo", "canary"],
+      "refresh": "15s",
+      "time": {"from": "now-1h", "to": "now"},
+      "panels": [
+        {
+          "id": 1,
+          "title": "HTTP Request Rate (req/min) by Endpoint & Status Family",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "targets": [
+            {
+              "expr": "sum by(endpoint, status_code) (rate(http_requests_total{namespace='staging'}[5m])) * 60",
+              "legendFormat": "{{endpoint}} {{status_code}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {"unit": "reqpm"}
+          }
+        },
+        {
+          "id": 2,
+          "title": "Error Rate % (SLI)",
+          "description": "5xx errors / total requests × 100. Same PromQL as canary AnalysisTemplate and SLO.",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+          "targets": [
+            {
+              "expr": "100 * sum(rate(http_requests_total{namespace='staging',status_code=~'5..'}[5m])) / sum(rate(http_requests_total{namespace='staging'}[5m]))",
+              "legendFormat": "Error Rate %"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "yellow", "value": 0.5},
+                  {"color": "red", "value": 2}
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "Request Latency P50 and P99 (ms)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum by(le, endpoint)(rate(http_request_duration_seconds_bucket{namespace='staging'}[5m]))) * 1000",
+              "legendFormat": "P50 {{endpoint}}"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum by(le, endpoint)(rate(http_request_duration_seconds_bucket{namespace='staging'}[5m]))) * 1000",
+              "legendFormat": "P99 {{endpoint}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "ms"}}
+        },
+        {
+          "id": 4,
+          "title": "Pod CPU Actual vs Limit",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "targets": [
+            {
+              "expr": "sum by(pod)(rate(container_cpu_usage_seconds_total{namespace='staging',pod=~'genesis-platform-api-.*'}[5m]))",
+              "legendFormat": "CPU used — {{pod}}"
+            },
+            {
+              "expr": "sum by(pod)(kube_pod_container_resource_limits{namespace='staging',pod=~'genesis-platform-api-.*',resource='cpu'})",
+              "legendFormat": "CPU limit — {{pod}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "short"}}
+        },
+        {
+          "id": 5,
+          "title": "Pod Memory Actual vs Limit",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+          "targets": [
+            {
+              "expr": "sum by(pod)(container_memory_working_set_bytes{namespace='staging',pod=~'genesis-platform-api-.*'})",
+              "legendFormat": "Memory used — {{pod}}"
+            },
+            {
+              "expr": "sum by(pod)(kube_pod_container_resource_limits{namespace='staging',pod=~'genesis-platform-api-.*',resource='memory'})",
+              "legendFormat": "Memory limit — {{pod}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "bytes"}}
+        },
+        {
+          "id": 6,
+          "title": "Canary vs Stable Traffic Split (live during rollout)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+          "targets": [
+            {
+              "expr": "sum(rate(http_requests_total{namespace='staging',service='genesis-platform-api-canary'}[1m])) * 60",
+              "legendFormat": "Canary (req/min)"
+            },
+            {
+              "expr": "sum(rate(http_requests_total{namespace='staging',service='genesis-platform-api-stable'}[1m])) * 60",
+              "legendFormat": "Stable (req/min)"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "reqpm"}}
+        },
+        {
+          "id": 7,
+          "title": "Units Created by Tenant (genesis_units_created_total)",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24},
+          "targets": [
+            {
+              "expr": "sum by(tenant_id)(rate(genesis_units_created_total{namespace='staging'}[5m])) * 60",
+              "legendFormat": "Tenant: {{tenant_id}}"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "units/min"}}
+        }
+      ]
+    }

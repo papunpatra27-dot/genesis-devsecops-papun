@@ -1,0 +1,60 @@
+##############################################################################
+# Policy 2 — require-resource-limits
+# All containers must declare resources.limits.cpu and resources.limits.memory.
+# Mode: Enforce — pods without explicit limits are rejected at admission.
+##############################################################################
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Without CPU and memory limits a single runaway pod can exhaust node
+      resources and trigger OOM kills on the t2.micro k3s node.
+      This policy rejects any Pod that does not explicitly declare both limits.
+spec:
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    - name: check-container-resource-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      validate:
+        message: >-
+          Every container must declare resources.limits.cpu and
+          resources.limits.memory. Add a limits block to your container spec.
+        pattern:
+          spec:
+            containers:
+              - resources:
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"
+    - name: check-init-container-resource-limits
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+      preconditions:
+        all:
+          - key: "{{ request.object.spec.initContainers[] | length(@) }}"
+            operator: GreaterThanOrEquals
+            value: 1
+      validate:
+        message: >-
+          Every init-container must declare resources.limits.cpu and
+          resources.limits.memory.
+        pattern:
+          spec:
+            initContainers:
+              - resources:
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"

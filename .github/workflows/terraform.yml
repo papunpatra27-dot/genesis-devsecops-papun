@@ -1,0 +1,282 @@
+##############################################################################
+# .github/workflows/terraform.yml
+#
+# Terraform pipeline — Infrastructure as Code CI/CD.
+#
+# TRIGGERS:
+#   pull_request → terraform plan (posted as PR comment for peer review)
+#   push to main → terraform apply -auto-approve (after PR merge)
+#
+# AUTHENTICATION:
+#   AWS OIDC only. No static credentials anywhere.
+#   GitHub Actions assumes the deployment role via OIDC federation.
+#   The role was created by infrastructure/modules/iam/main.tf.
+#
+# BOOTSTRAP PREREQUISITE:
+#   The S3 backend bucket and DynamoDB lock table must already exist.
+#   Run scripts/bootstrap.sh (Linux/macOS) or scripts/bootstrap.ps1 (Windows)
+#   ONCE before the first terraform init. See README.md for details.
+#
+# WORKFLOW:
+#   1. Checkout code
+#   2. Configure AWS OIDC credentials
+#   3. Setup Terraform (with wrapper for plan output capture)
+#   4. terraform init -backend-config=backend.hcl
+#   5. terraform validate
+#   6. terraform fmt -check (format gate)
+#   7a. [PR]   terraform plan → post output as PR comment
+#   7b. [main] terraform apply -auto-approve
+##############################################################################
+name: Terraform IaC Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "infrastructure/**"
+      - ".github/workflows/terraform.yml"
+  # MANUAL ONLY — terraform apply does not run automatically on push.
+  # Run from: GitHub → Actions → Terraform IaC Pipeline → Run workflow
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Reason for manual Terraform apply'
+        required: true
+        default: 'Manual apply'
+
+permissions:
+  contents: read
+  id-token: write       # OIDC for AWS
+  pull-requests: write  # Post plan output as PR comment
+
+env:
+  AWS_REGION: ap-south-2
+  TF_WORKING_DIR: infrastructure/environments/dev
+  TF_VERSION: "1.8.5"
+
+jobs:
+  ##############################################################################
+  # terraform-plan — runs on pull_request
+  ##############################################################################
+  terraform-plan:
+    name: "Terraform Plan (dev)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+    env:
+      # terraform_wrapper: true captures plan output in GITHUB_OUTPUT
+      TF_CLI_ARGS: "-no-color"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC — no static keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: true   # Enables exit code capture and output streaming
+
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true   # Report but do not block — shown in PR comment
+
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -input=false
+
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -var-file=terraform.tfvars \
+            -input=false \
+            -out=tfplan.binary \
+            -detailed-exitcode
+        continue-on-error: true   # Exit code 2 = changes present; not an error
+
+      - name: Convert plan to readable output
+        run: |
+          terraform show -no-color tfplan.binary > tfplan.txt
+          wc -l tfplan.txt
+
+      - name: Post plan as PR comment
+        uses: actions/github-script@v7
+        if: always()
+        env:
+          PLAN_OUTPUT: ${{ steps.plan.outputs.stdout }}
+          PLAN_STDERR: ${{ steps.plan.outputs.stderr }}
+          PLAN_EXITCODE: ${{ steps.plan.outcome }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            let plan = '';
+            const planPath = `${process.env.TF_WORKING_DIR}/tfplan.txt`;
+            if (fs.existsSync(planPath)) {
+              plan = fs.readFileSync(planPath, 'utf8');
+            } else {
+              plan = '(plan file not found — see workflow logs)';
+            }
+            const maxLen = 50000;
+            const truncated = plan.length > maxLen
+              ? plan.slice(0, maxLen) + '\n\n... (truncated — see workflow logs)'
+              : plan;
+
+            const fmtResult = '${{ steps.fmt.outcome }}' === 'success'
+              ? '✅ Passed' : '⚠️ Failed (non-blocking)';
+            const initResult = '${{ steps.init.outcome }}' === 'success'
+              ? '✅ Passed' : '❌ Failed';
+            const validateResult = '${{ steps.validate.outcome }}' === 'success'
+              ? '✅ Passed' : '❌ Failed';
+            const planResult = '${{ steps.plan.outcome }}' === 'success'
+              ? '✅ No changes' : '${{ steps.plan.outcome }}' === 'failure'
+              ? '❌ Failed' : '📋 Changes pending review';
+
+            const comment = [
+              `## Terraform Plan — \`${process.env.TF_WORKING_DIR}\``,
+              `| Check | Result |`,
+              `|-------|--------|`,
+              `| Format | ${fmtResult} |`,
+              `| Init   | ${initResult} |`,
+              `| Validate | ${validateResult} |`,
+              `| Plan   | ${planResult} |`,
+              ``,
+              `<details><summary>📋 Plan output</summary>`,
+              ``,
+              `\`\`\`hcl`,
+              truncated,
+              `\`\`\``,
+              `</details>`,
+              ``,
+              `> Triggered by commit \`${{ github.sha }}\``,
+              `> Applies to environment: **dev**`,
+            ].join('\n');
+
+            // Find and update existing comment (avoid duplicate comments on re-runs)
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existingComment = comments.find(c =>
+              c.user.type === 'Bot' &&
+              c.body.includes('Terraform Plan')
+            );
+
+            if (existingComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment,
+              });
+            }
+
+      - name: Fail if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        if: steps.plan.outcome != 'failure'
+        with:
+          name: terraform-plan
+          path: ${{ env.TF_WORKING_DIR }}/tfplan.binary
+          retention-days: 7
+
+  ##############################################################################
+  # terraform-apply — manual only (workflow_dispatch)
+  # Trigger: GitHub → Actions → Terraform IaC Pipeline → Run workflow
+  # A human approval gate (dev-terraform environment) fires before apply runs.
+  ##############################################################################
+  terraform-apply:
+    name: "Terraform Apply (dev)"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+    environment:
+      name: dev-terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false   # Apply does not need output capture
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config=backend.hcl \
+            -input=false
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+      - name: Terraform Apply
+        id: apply
+        run: |
+          terraform apply \
+            -var-file=terraform.tfvars \
+            -input=false \
+            -auto-approve \
+            2>&1 | tee /tmp/tf-apply.log
+
+          # Extract key outputs
+          echo ""
+          echo "=== Terraform Outputs ==="
+          terraform output -no-color || true
+
+      - name: Upload apply log
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: terraform-apply-log
+          path: /tmp/tf-apply.log
+          retention-days: 30
+
+      - name: Post apply summary to Actions summary
+        if: always()
+        run: |
+          OUTCOME="${{ steps.apply.outcome }}"
+          {
+            echo "## Terraform Apply — dev environment"
+            echo ""
+            echo "**Commit**: \`${{ github.sha }}\`"
+            echo "**Outcome**: ${OUTCOME}"
+            echo ""
+            echo "\`\`\`"
+            terraform output -no-color 2>/dev/null | head -20 || echo "(no outputs)"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

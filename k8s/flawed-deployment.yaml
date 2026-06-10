@@ -1,0 +1,51 @@
+##############################################################################
+# k8s/flawed-deployment.yaml
+#
+# INTENTIONAL FLAW 3 — FOR KYVERNO GATE DEMONSTRATION ONLY.
+# This manifest violates three Kyverno ClusterPolicies (all in Enforce mode).
+#
+# Violations:
+#   1. no-root-containers:       runAsNonRoot: false  → BLOCKED
+#   2. require-resource-limits:  no resources.limits  → BLOCKED
+#   3. ecr-only-images:          uses docker.io/nginx  → BLOCKED (staging ns)
+#
+# Used by Stage 11 (Kyverno offline validation) to demonstrate that the
+# enforcement gate works. The `kyverno apply` command MUST return violations.
+# Clean manifests in k8s/ must pass the same check.
+#
+# NEVER deploy this manifest to a real cluster.
+##############################################################################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flaw3-demo
+  namespace: staging
+  labels:
+    app: flaw3-demo
+    purpose: pipeline-gate-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flaw3-demo
+  template:
+    metadata:
+      labels:
+        app: flaw3-demo
+    spec:
+      containers:
+        - name: nginx
+          # VIOLATION 3: image is from docker.io, not ECR
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+          # VIOLATION 1: runAsNonRoot must be true
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+          # VIOLATION 2: no resources.limits.cpu / resources.limits.memory block
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+          # Note: resources.limits intentionally absent
