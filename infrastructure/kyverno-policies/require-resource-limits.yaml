@@ -13,7 +13,7 @@ metadata:
     policies.kyverno.io/severity: medium
     policies.kyverno.io/description: >-
       Without CPU and memory limits a single runaway pod can exhaust node
-      resources and trigger OOM kills on the t2.micro k3s node.
+      resources and trigger OOM kills on the t3.micro k3s node.
       This policy rejects any Pod that does not explicitly declare both limits.
 spec:
   validationFailureAction: Enforce

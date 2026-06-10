@@ -9,10 +9,17 @@ terraform {
   required_version = ">= 1.7.0"
 
   required_providers {
-    aws = { source = "hashicorp/aws"; version = "~> 5.50" }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.50"
+    }
   }
 
-  backend "s3" {}
+  backend "s3" {
+    bucket = "papun-devsecops-320644184091-tfstate"
+    key    = "dev/terraform.tfstate"
+    region = "ap-south-1"
+  }
 }
 
 provider "aws" {
@@ -64,14 +71,14 @@ module "networking" {
 module "iam" {
   source = "../../modules/iam"
 
-  project                = var.project
-  environment            = var.environment
-  github_org             = var.github_org
-  github_repo            = var.github_repo
-  ecr_repository_name    = var.ecr_repository_name
-  state_bucket_name      = var.state_bucket_name
-  state_lock_table_name  = var.state_lock_table_name
-  common_tags            = local.common_tags
+  project               = var.project
+  environment           = var.environment
+  github_org            = var.github_org
+  github_repo           = var.github_repo
+  ecr_repository_name   = var.ecr_repository_name
+  state_bucket_name     = var.state_bucket_name
+  state_lock_table_name = var.state_lock_table_name
+  common_tags           = local.common_tags
 }
 
 ##############################################################################
@@ -122,6 +129,6 @@ module "observability" {
 ##############################################################################
 # Outputs
 ##############################################################################
-output "k3s_public_ip"          { value = module.compute.public_ip }
-output "ecr_repository_url"     { value = module.ecr.repository_url }
+output "k3s_public_ip" { value = module.compute.public_ip }
+output "ecr_repository_url" { value = module.ecr.repository_url }
 output "github_actions_role_arn" { value = module.iam.github_actions_role_arn }

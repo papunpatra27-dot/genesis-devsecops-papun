@@ -3,11 +3,11 @@ building DevSecOps practice from the ground, first go through the whole document
 The governing principle
 •	Strong engineering on a simple foundation beats weak engineering on a complex one. A single-service API with a production-quality Kubernetes platform around it tells us more than a ten-service mesh with shortcuts.
 
-•	Stay within free tier. k3s on EC2 t2.micro runs a real Kubernetes cluster at zero cost. Any architecture requiring a paid EKS cluster is not required 
+•	Stay within free tier. k3s on EC2 t3.micro runs a real Kubernetes cluster at zero cost. Any architecture requiring a paid EKS cluster is not required 
 •	Canary is not optional. Argo Rollouts with a real metric-based promotion gate is a mandatory deliverable. Rolling updates.
 
 Cloud	Resource	Free Tier Limit & Notes
-AWS	EC2 t2.micro (k3s host)	750 hours/month — runs k3s Kubernetes cluster with Argo CD, Kyverno, Argo Rollouts, Prometheus, Grafana.
+AWS	EC2 t3.micro (k3s host)	750 hours/month — runs k3s Kubernetes cluster with Argo CD, Kyverno, Argo Rollouts, Prometheus, Grafana.
 AWS	ECR (container images)	500 MB/month — one small Python image fits easily.
 AWS	S3 (Terraform state + Velero backups)	5 GB — Terraform state files + DR backup snapshots.
 AWS	DynamoDB (state locking)	25 GB + PAY_PER_REQUEST — stays free under normal usage.
@@ -16,7 +16,7 @@ AWS	CloudWatch (basic)	Basic metrics free; 5 GB log ingestion/month — suppleme
 GitHub	GitHub Actions (public repo)	2,000 minutes/month — runs all pipeline stages comfortably.
 In-cluster	Argo CD, Argo Rollouts, Kyverno, Prometheus, Grafana, Loki	All open-source, deployed via Helm to k3s. Zero cost.
 
-k3s setup note: Install k3s on your EC2 t2.micro with a single command: curl -sfL https://get.k3s.io | sh - . Argo CD and Kyverno install via Helm in under 15 minutes. If you prefer kind or minikube locally, that is acceptable.
+k3s setup note: Install k3s on your EC2 t3.micro with a single command: curl -sfL https://get.k3s.io | sh - . Argo CD and Kyverno install via Helm in under 15 minutes. If you prefer kind or minikube locally, that is acceptable.
 
 
 task 1 for terraform:
@@ -201,7 +201,7 @@ DR Design Document  [15 Marks]
 Write docs/dr-design.md. Use sub-headings — not prose paragraphs — for each of the following five sections:
 
 Section 1 — Current state inventory
-List every component in your deployed environment: EC2 instance (k3s), ECR images, Terraform state (S3), Kyverno policies, Argo CD configuration, application Kubernetes manifests (stored in Git). For each component, state: where it lives, what is lost in a full ap-south-2 regional failure, and whether it is currently recoverable without any additional DR setup.
+List every component in your deployed environment: EC2 instance (k3s), ECR images, Terraform state (S3), Kyverno policies, Argo CD configuration, application Kubernetes manifests (stored in Git). For each component, state: where it lives, what is lost in a full ap-south-1 regional failure, and whether it is currently recoverable without any additional DR setup.
 
 Section 2 — RTO and RPO targets
 Propose specific RTO and RPO targets for this service and justify them. The justification must reference the business context — is this an internal operations tool or a customer-facing SaaS? They have different tolerances. Show the calculation: at your chosen SLO target from Part 3, what is the maximum allowed downtime per month? How does that constrain your RTO?
@@ -211,7 +211,7 @@ This is where DR on Kubernetes differs from Lambda or traditional compute. Addre
 •	k3s cluster: how do you rebuild it? Terraform re-applies the EC2 instance — but k3s itself, its configuration, and its state need reinstalling. What is the recovery procedure and how long does it take?
 •	Kubernetes manifests: they live in Git (GitOps). What is the exact sequence to restore Argo CD and sync all applications? Include the step where Argo CD itself is not yet running.
 •	Kyverno policies: they live in Git. What order do you restore them relative to application deployments — and why does order matter?
-•	Container images in ECR: ECR is regional. If ap-south-2 is unavailable, your images are unavailable. What is your strategy? Cross-region replication? A backup registry? Rebuilding from source? Evaluate the trade-offs.
+•	Container images in ECR: ECR is regional. If ap-south-1 is unavailable, your images are unavailable. What is your strategy? Cross-region replication? A backup registry? Rebuilding from source? Evaluate the trade-offs.
 •	Terraform state in S3: S3 has 99.99% availability but is regional. What happens to your state file in a regional failure? Does S3 cross-region replication solve this or introduce new problems (state divergence)?
 
 Section 4 — DR runbook (numbered, command-level)

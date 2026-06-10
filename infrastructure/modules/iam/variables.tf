@@ -1,7 +1,13 @@
 variable "project"              { type = string }
 variable "environment"          { type = string }
-variable "github_org"           { type = string; description = "GitHub organisation name." }
-variable "github_repo"          { type = string; description = "GitHub repository name." }
+variable "github_org" {
+  type        = string
+  description = "GitHub organisation name."
+}
+variable "github_repo" {
+  type = string
+  description = "GitHub repository name."
+}
 variable "ecr_repository_name"  { type = string }
 variable "state_bucket_name"    { type = string }
 variable "state_lock_table_name" { type = string }

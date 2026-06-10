@@ -32,7 +32,7 @@ A production-quality DevSecOps reference implementation built on AWS Free Tier r
 │               └── Canary smoke test                         │
 │                                                             │
 │  AWS (Free Tier)                                            │
-│  ├── EC2 t2.micro ──── k3s cluster                         │
+│  ├── EC2 t3.micro ──── k3s cluster                         │
 │  │   ├── Argo CD (GitOps controller)                        │
 │  │   ├── Argo Rollouts (canary: 10→25→50→100%)             │
 │  │   ├── Kyverno (admission enforcement)                    │
@@ -69,7 +69,7 @@ genesis-devsecops-papun/
 │   ├── variables.tf              # Global variables
 │   ├── modules/
 │   │   ├── networking/           # VPC, subnets, IGW, security groups, flow logs
-│   │   ├── compute/              # EC2 t2.micro, key pair, EIP, user-data k3s bootstrap
+│   │   ├── compute/              # EC2 t3.micro, key pair, EIP, user-data k3s bootstrap
 │   │   ├── iam/                  # k3s node role, GitHub OIDC, deployment role
 │   │   ├── ecr/                  # Repository, lifecycle policy, image scanning
 │   │   └── observability/        # CloudWatch logs, SNS alerts, alarms
@@ -111,7 +111,7 @@ genesis-devsecops-papun/
 
 ```bash
 # Replace ACCOUNT_ID throughout
-aws s3api create-bucket --bucket genesis-devsecops-terraform-state-ACCOUNT_ID --region ap-south-2
+aws s3api create-bucket --bucket genesis-devsecops-terraform-state-ACCOUNT_ID --region ap-south-1
 aws s3api put-bucket-versioning --bucket genesis-devsecops-terraform-state-ACCOUNT_ID \
   --versioning-configuration Status=Enabled
 aws s3api put-bucket-encryption --bucket genesis-devsecops-terraform-state-ACCOUNT_ID \
@@ -123,7 +123,7 @@ aws s3api put-public-access-block --bucket genesis-devsecops-terraform-state-ACC
 aws dynamodb create-table --table-name genesis-terraform-state-lock \
   --attribute-definitions AttributeName=LockID,AttributeType=S \
   --key-schema AttributeName=LockID,KeyType=HASH \
-  --billing-mode PAY_PER_REQUEST --region ap-south-2
+  --billing-mode PAY_PER_REQUEST --region ap-south-1
 ```
 
 ### 2. Deploy Dev Environment

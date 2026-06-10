@@ -60,7 +60,7 @@ All open-source, deployed via Helm to k3s. Zero cost."
 
 And:
 
-"k3s setup note: Install k3s on your EC2 t2.micro with a single command:
+"k3s setup note: Install k3s on your EC2 t3.micro with a single command:
 curl -sfL https://get.k3s.io | sh -. 
 Argo CD and Kyverno install via Helm in under 15 minutes."
 
@@ -238,7 +238,7 @@ Pods have labels: app=genesis-platform-api (from Rollout resource)
 │ STEP 6: POD RECEIVES TRAFFIC ON PORT 8000                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 
-Pod running image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-xyz
+Pod running image: 320644184091.dkr.ecr.ap-south-1.amazonaws.com/genesis-platform-api:sha-xyz
 
 Container inside pod:
   Port 8000: Running FastAPI app (uvicorn)

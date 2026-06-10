@@ -190,7 +190,7 @@ The command prompts you for four values, one at a time. Type each and press Ente
 ```
 AWS Access Key ID [None]:     paste-your-access-key-id-here
 AWS Secret Access Key [None]: paste-your-secret-access-key-here
-Default region name [None]:   ap-south-2
+Default region name [None]:   ap-south-1
 Default output format [None]: json
 ```
 
@@ -219,7 +219,7 @@ The `"Account"` value is your 12-digit AWS account ID. Write it down.
 # These variables live only for this PowerShell session.
 # If you close and reopen PowerShell, run these two lines again before any AWS commands.
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$REGION     = "ap-south-2"
+$REGION     = "ap-south-1"
 
 Write-Host "Account ID : $ACCOUNT_ID"
 Write-Host "Region     : $REGION"
@@ -476,7 +476,7 @@ The S3 bucket name used in your `backend.hcl` is: `genesis-devsecops-terraform-s
 # FOLDER: anywhere
 aws s3api create-bucket `
   --bucket "genesis-devsecops-terraform-state-$ACCOUNT_ID" `
-  --region ap-south-2
+  --region ap-south-1
 ```
 
 Expected output: `{"Location": "/genesis-devsecops-terraform-state-320644184091"}`
@@ -538,7 +538,7 @@ aws s3api get-public-access-block --bucket "genesis-devsecops-terraform-state-$A
 # FOLDER: anywhere
 aws s3api create-bucket `
   --bucket "genesis-tf-state-logs-$ACCOUNT_ID" `
-  --region ap-south-2
+  --region ap-south-1
 ```
 
 ### Step 4.6 — Enable access logging on the state bucket pointing to logs bucket
@@ -568,7 +568,7 @@ aws dynamodb create-table `
   --attribute-definitions AttributeName=LockID,AttributeType=S `
   --key-schema AttributeName=LockID,KeyType=HASH `
   --billing-mode PAY_PER_REQUEST `
-  --region ap-south-2
+  --region ap-south-1
 ```
 
 Wait 15 seconds, then verify it is ACTIVE:
@@ -947,7 +947,7 @@ Browser: `http://YOUR_EC2_IP:32000` — login: `admin` / `admin123!`
 ```powershell
 # FOLDER: C:\Clouddev\devsecops-papun
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$REGION     = "ap-south-2"
+$REGION     = "ap-south-1"
 $ECR_URI    = "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/genesis-platform-api"
 $GIT_SHA    = (git rev-parse --short HEAD)
 
@@ -1244,7 +1244,7 @@ Select-String -Path k8s/analysis-template.yaml -Pattern "http_requests_total"
 ```powershell
 # LOCAL: Restore session variables (run at start of every new PowerShell session)
 $ACCOUNT_ID = (aws sts get-caller-identity --query Account --output text)
-$REGION     = "ap-south-2"
+$REGION     = "ap-south-1"
 $ECR_URI    = "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/genesis-platform-api"
 $GITHUB_ORG = "your-github-username"
 $EC2_IP     = (aws ec2 describe-instances --filters "Name=tag:Project,Values=genesis" "Name=instance-state-name,Values=running" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)

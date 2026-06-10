@@ -1,6 +1,6 @@
 # environments/prod/terraform.tfvars
 
-aws_region  = "ap-south-2"
+aws_region  = "ap-south-1"
 project     = "genesis"
 environment = "prod"
 owner       = "platform-team"
@@ -8,10 +8,10 @@ owner       = "platform-team"
 vpc_cidr             = "10.1.0.0/16"
 public_subnet_cidrs  = ["10.1.1.0/24", "10.1.2.0/24"]
 private_subnet_cidrs = ["10.1.10.0/24", "10.1.11.0/24"]
-availability_zones   = ["ap-south-2a", "ap-south-2b"]
+availability_zones   = ["ap-south-1a", "ap-south-1b"]
 admin_cidr           = "REPLACE_WITH_VPN_OR_BASTION_CIDR"
 
-ec2_instance_type  = "t2.micro"
+ec2_instance_type  = "t3.micro"
 k3s_ssh_public_key = "REPLACE_WITH_YOUR_PUBLIC_SSH_KEY"
 
 github_org  = "REPLACE_WITH_GITHUB_ORG"

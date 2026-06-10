@@ -772,7 +772,7 @@ kyverno apply \
 # 
 # policy ecr-only-images -> resource /Deployment/flawed-nginx-demo failed:
 #   1. ecr-registry-only: validation error: Images must come from the ECR registry.
-#      Image 'nginx:latest' does not match pattern '320644184091.dkr.ecr.ap-south-2.amazonaws.com/*'
+#      Image 'nginx:latest' does not match pattern '320644184091.dkr.ecr.ap-south-1.amazonaws.com/*'
 # 
 # pass: 0, fail: 3, warn: 0, error: 0, skip: 0
 
@@ -1041,7 +1041,7 @@ This user is needed only for the initial Terraform run. After Terraform creates 
 aws configure --profile terraform-bootstrap
 # AWS Access Key ID: <paste from step 1.2>
 # AWS Secret Access Key: <paste from step 1.2>
-# Default region: ap-south-2
+# Default region: ap-south-1
 # Default output: json
 
 # Verify
@@ -1072,11 +1072,11 @@ cat ~/.ssh/genesis-k3s.pub
 aws ec2 import-key-pair \
   --key-name "genesis-k3s" \
   --public-key-material fileb://~/.ssh/genesis-k3s.pub \
-  --region ap-south-2 \
+  --region ap-south-1 \
   --profile terraform-bootstrap
 
 # Verify
-aws ec2 describe-key-pairs --key-names genesis-k3s --region ap-south-2 --profile terraform-bootstrap
+aws ec2 describe-key-pairs --key-names genesis-k3s --region ap-south-1 --profile terraform-bootstrap
 ```
 
 The `k3s_ssh_public_key` value for `terraform.tfvars` is the full content of `~/.ssh/genesis-k3s.pub`:
@@ -1086,10 +1086,10 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIxxxxxxxx genesis-k3s
 
 ### 1.5 — Confirm Free-Tier Region
 
-Verify you are working in `ap-south-2` (North Virginia). All resources in this project are in that region. The EC2 t2.micro free tier applies to a single region.
+Verify you are working in `ap-south-1` (North Virginia). All resources in this project are in that region. The EC2 t3.micro free tier applies to a single region.
 
 ```bash
-aws ec2 describe-regions --region-names ap-south-2 --profile terraform-bootstrap
+aws ec2 describe-regions --region-names ap-south-1 --profile terraform-bootstrap
 ```
 
 ---
@@ -1187,7 +1187,7 @@ Do NOT change `aws_region`, `project`, `environment`, `vpc_cidr` — they are al
 ```
 bucket         = "genesis-devsecops-terraform-state-320644184091"
 key            = "dev/terraform.tfstate"
-region         = "ap-south-2"
+region         = "ap-south-1"
 dynamodb_table = "genesis-terraform-state-lock"
 encrypt        = true
 ```
@@ -1215,9 +1215,9 @@ key    = "prod/terraform.tfstate"
 ```bash
 # Find the line with 320644184091 and replace it
 # Before:
-#   value: "320644184091.dkr.ecr.ap-south-2.amazonaws.com"
+#   value: "320644184091.dkr.ecr.ap-south-1.amazonaws.com"
 # After:
-#   value: "320644184091.dkr.ecr.ap-south-2.amazonaws.com"
+#   value: "320644184091.dkr.ecr.ap-south-1.amazonaws.com"
 
 sed -i 's/320644184091/320644184091/g' infrastructure/kyverno-policies/ecr-only-images.yaml
 # Windows PowerShell:
@@ -1329,7 +1329,7 @@ aws s3 ls s3://genesis-devsecops-terraform-state-320644184091 --profile terrafor
 
 aws dynamodb describe-table \
   --table-name genesis-terraform-state-lock \
-  --region ap-south-2 \
+  --region ap-south-1 \
   --profile terraform-bootstrap \
   --query 'Table.TableStatus'
 # Expected: "ACTIVE"
@@ -1423,7 +1423,7 @@ Apply complete! Resources: 28 added, 0 changed, 0 destroyed.
 
 Outputs:
 k3s_public_ip      = "54.123.45.67"
-ecr_repository_url = "320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api"
+ecr_repository_url = "320644184091.dkr.ecr.ap-south-1.amazonaws.com/genesis-platform-api"
 github_actions_role_arn = "arn:aws:iam::320644184091:role/genesis-dev-github-actions-role"
 ```
 
@@ -1717,7 +1717,7 @@ kubectl run test-root \
 
 # Test allow: valid manifest should pass
 kubectl run test-valid \
-  --image=320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:test \
+  --image=320644184091.dkr.ecr.ap-south-1.amazonaws.com/genesis-platform-api:test \
   --namespace=staging \
   --dry-run=server \
   --overrides='{"spec":{"securityContext":{"runAsNonRoot":true},"containers":[{"name":"test-valid","resources":{"limits":{"cpu":"100m","memory":"128Mi"}}}]}}' 2>&1
@@ -1732,10 +1732,10 @@ Argo CD will try to pull the image referenced in `rollout.yaml`. The image must 
 ### 10.1 — Authenticate Docker to ECR
 
 ```bash
-ECR_REGISTRY="320644184091.dkr.ecr.ap-south-2.amazonaws.com"
+ECR_REGISTRY="320644184091.dkr.ecr.ap-south-1.amazonaws.com"
 
 aws ecr get-login-password \
-  --region ap-south-2 \
+  --region ap-south-1 \
   --profile terraform-bootstrap | \
 docker login \
   --username AWS \
@@ -1762,7 +1762,7 @@ docker push $ECR_REGISTRY/genesis-platform-api:sha-initial
 # Verify in ECR
 aws ecr list-images \
   --repository-name genesis-platform-api \
-  --region ap-south-2 \
+  --region ap-south-1 \
   --profile terraform-bootstrap
 # Expected: shows sha-initial tag
 ```
@@ -1776,7 +1776,7 @@ sed -i 's/REPLACE_GIT_SHA/sha-initial/g' k8s/rollout.yaml
 # Verify
 grep "image:" k8s/rollout.yaml
 # Expected:
-# image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-initial
+# image: 320644184091.dkr.ecr.ap-south-1.amazonaws.com/genesis-platform-api:sha-initial
 
 cd ..
 git add k8s/rollout.yaml
@@ -1791,10 +1791,10 @@ git push origin main
 kubectl create namespace staging --dry-run=client -o yaml | kubectl apply -f -
 
 # Create ECR pull secret
-ECR_PASSWORD=$(aws ecr get-login-password --region ap-south-2 --profile terraform-bootstrap)
+ECR_PASSWORD=$(aws ecr get-login-password --region ap-south-1 --profile terraform-bootstrap)
 
 kubectl create secret docker-registry ecr-credentials \
-  --docker-server=320644184091.dkr.ecr.ap-south-2.amazonaws.com \
+  --docker-server=320644184091.dkr.ecr.ap-south-1.amazonaws.com \
   --docker-username=AWS \
   --docker-password="$ECR_PASSWORD" \
   --namespace=staging
@@ -2406,7 +2406,7 @@ terraform -chdir=infrastructure/environments/dev state list | wc -l
 # 3. Verify ECR images exist (would be missing in a regional failure)
 aws ecr list-images \
   --repository-name genesis-platform-api \
-  --region ap-south-2 \
+  --region ap-south-1 \
   --profile terraform-bootstrap
 ```
 

@@ -21,14 +21,14 @@
 #     s3:PutBucketLogging, dynamodb:CreateTable
 #
 # Usage:
-#   export AWS_REGION=ap-south-2
+#   export AWS_REGION=ap-south-1
 #   export PROJECT=genesis
 #   bash scripts/bootstrap.sh
 ##############################################################################
 set -euo pipefail
 
 # ── Configuration ─────────────────────────────────────────────────────────
-REGION="${AWS_REGION:-ap-south-2}"
+REGION="${AWS_REGION:-ap-south-1}"
 PROJECT="${PROJECT:-genesis}"
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -59,7 +59,7 @@ echo "[1/8] Creating access-logs bucket: ${LOGS_BUCKET}"
 if bucket_exists "${LOGS_BUCKET}"; then
   echo "      Already exists — skipping."
 else
-  if [ "${REGION}" = "ap-south-2" ]; then
+  if [ "${REGION}" = "ap-south-1" ]; then
     aws s3api create-bucket \
       --bucket "${LOGS_BUCKET}" \
       --region "${REGION}"
@@ -88,7 +88,7 @@ echo "[2/8] Creating state bucket: ${STATE_BUCKET}"
 if bucket_exists "${STATE_BUCKET}"; then
   echo "      Already exists — skipping."
 else
-  if [ "${REGION}" = "ap-south-2" ]; then
+  if [ "${REGION}" = "ap-south-1" ]; then
     aws s3api create-bucket \
       --bucket "${STATE_BUCKET}" \
       --region "${REGION}"
