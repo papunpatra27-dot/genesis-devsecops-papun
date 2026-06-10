@@ -133,12 +133,12 @@ jobs:
 # Stage 6 — Image Vulnerability Scan (Trivy)
 # Gate: YES — CRITICAL findings block.
 ##############################################################################
-trivy-scan:
-  name: "Stage 6 — Trivy Image Scan"
-  runs-on: ubuntu-latest
-  needs: [docker-build]
+  trivy-scan:
+   name: "Stage 6 — Trivy Image Scan"
+   runs-on: ubuntu-latest
+   needs: [docker-build]
 
-  steps:
+   steps:
     - uses: actions/checkout@v4
 
     - name: Download image artifact
@@ -357,11 +357,11 @@ trivy-scan:
   ##############################################################################
 # Stage 11 — Kyverno Manifest Validation (offline, no cluster needed)
 ##############################################################################
-kyverno-validate:
-  name: "Stage 11 — Kyverno Offline Validation"
-  runs-on: ubuntu-latest
+  kyverno-validate:
+   name: "Stage 11 — Kyverno Offline Validation"
+   runs-on: ubuntu-latest
 
-  steps:
+   steps:
     - uses: actions/checkout@v4
 
     - name: Install Kyverno CLI
