@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:sha-abc1234
+          image: 320644184091.dkr.ecr.ap-south-1.amazonaws.com/genesis-platform-api:sha-abc1234
           ports:
             - containerPort: 8000
           resources:

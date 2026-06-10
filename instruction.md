@@ -201,7 +201,7 @@ DR Design Document  [15 Marks]
 Write docs/dr-design.md. Use sub-headings — not prose paragraphs — for each of the following five sections:
 
 Section 1 — Current state inventory
-List every component in your deployed environment: EC2 instance (k3s), ECR images, Terraform state (S3), Kyverno policies, Argo CD configuration, application Kubernetes manifests (stored in Git). For each component, state: where it lives, what is lost in a full ap-south-2 regional failure, and whether it is currently recoverable without any additional DR setup.
+List every component in your deployed environment: EC2 instance (k3s), ECR images, Terraform state (S3), Kyverno policies, Argo CD configuration, application Kubernetes manifests (stored in Git). For each component, state: where it lives, what is lost in a full ap-south-1 regional failure, and whether it is currently recoverable without any additional DR setup.
 
 Section 2 — RTO and RPO targets
 Propose specific RTO and RPO targets for this service and justify them. The justification must reference the business context — is this an internal operations tool or a customer-facing SaaS? They have different tolerances. Show the calculation: at your chosen SLO target from Part 3, what is the maximum allowed downtime per month? How does that constrain your RTO?
@@ -211,7 +211,7 @@ This is where DR on Kubernetes differs from Lambda or traditional compute. Addre
 •	k3s cluster: how do you rebuild it? Terraform re-applies the EC2 instance — but k3s itself, its configuration, and its state need reinstalling. What is the recovery procedure and how long does it take?
 •	Kubernetes manifests: they live in Git (GitOps). What is the exact sequence to restore Argo CD and sync all applications? Include the step where Argo CD itself is not yet running.
 •	Kyverno policies: they live in Git. What order do you restore them relative to application deployments — and why does order matter?
-•	Container images in ECR: ECR is regional. If ap-south-2 is unavailable, your images are unavailable. What is your strategy? Cross-region replication? A backup registry? Rebuilding from source? Evaluate the trade-offs.
+•	Container images in ECR: ECR is regional. If ap-south-1 is unavailable, your images are unavailable. What is your strategy? Cross-region replication? A backup registry? Rebuilding from source? Evaluate the trade-offs.
 •	Terraform state in S3: S3 has 99.99% availability but is regional. What happens to your state file in a regional failure? Does S3 cross-region replication solve this or introduce new problems (state divergence)?
 
 Section 4 — DR runbook (numbered, command-level)

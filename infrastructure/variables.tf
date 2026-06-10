@@ -6,7 +6,7 @@
 variable "aws_region" {
   description = "AWS region to deploy resources into."
   type        = string
-  default     = "ap-south-2"
+  default     = "ap-south-1"
 }
 
 variable "project" {
@@ -52,7 +52,7 @@ variable "private_subnet_cidrs" {
 variable "availability_zones" {
   description = "List of AZs to distribute subnets across."
   type        = list(string)
-  default     = ["ap-south-2a", "ap-south-2b"]
+  default     = ["ap-south-1a", "ap-south-1b"]
 }
 
 variable "ec2_instance_type" {

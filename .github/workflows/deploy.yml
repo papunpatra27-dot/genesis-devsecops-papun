@@ -52,7 +52,7 @@ permissions:
   id-token: write    # OIDC for AWS (ECR push) and Cosign (keyless signing)
 
 env:
-  AWS_REGION: ap-south-2
+  AWS_REGION: ap-south-1
   ECR_REPOSITORY: genesis-platform-api
 
 jobs:

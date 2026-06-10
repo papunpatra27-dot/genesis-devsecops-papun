@@ -697,7 +697,7 @@ Step 2: Configure Terraform variables
   Set: aws_region, vpc_cidr, admin_cidr, alarm_email, k3s_ssh_public_key, etc.
 
 Step 3: Create S3 bucket
-  Command: aws s3 mb s3://genesis-terraform-state-320644184091 --region ap-south-2
+  Command: aws s3 mb s3://genesis-terraform-state-320644184091 --region ap-south-1
   Command: aws s3api put-bucket-versioning --bucket ... --versioning-configuration Status=Enabled
 
 Step 4: Create DynamoDB table

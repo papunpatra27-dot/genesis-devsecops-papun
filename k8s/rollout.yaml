@@ -47,7 +47,7 @@ spec:
       containers:
         - name: api
           # Image tag is replaced by the CI pipeline with git-SHA tag
-          image: 320644184091.dkr.ecr.ap-south-2.amazonaws.com/genesis-platform-api:REPLACE_GIT_SHA
+          image: 320644184091.dkr.ecr.ap-south-1.amazonaws.com/genesis-platform-api:REPLACE_GIT_SHA
           imagePullPolicy: Always
           ports:
             - name: http

@@ -6,7 +6,7 @@ Command: aws iam simulate-principal-policy
 ROLE: genesis-dev-k3s-node-role (EC2 Instance Profile)
 =============================================================================
 
-Actions tested against resource ARN arn:aws:ecr:ap-south-2:320644184091:repository/genesis-platform-api
+Actions tested against resource ARN arn:aws:ecr:ap-south-1:320644184091:repository/genesis-platform-api
 
   ecr:GetAuthorizationToken              -> allowed   (*)
   ecr:BatchCheckLayerAvailability        -> allowed
@@ -16,7 +16,7 @@ Actions tested against resource ARN arn:aws:ecr:ap-south-2:320644184091:reposito
   ecr:PutImage                           -> DENIED    (not in k3s node policy — correct)
   ecr:InitiateLayerUpload                -> DENIED    (not in k3s node policy — correct)
 
-Actions tested against arn:aws:logs:ap-south-2:320644184091:log-group:/genesis/*
+Actions tested against arn:aws:logs:ap-south-1:320644184091:log-group:/genesis/*
 
   logs:CreateLogStream                   -> allowed
   logs:PutLogEvents                      -> allowed
@@ -39,7 +39,7 @@ SUMMARY: k3s-node-role has ONLY the permissions it needs.
 ROLE: genesis-dev-github-actions-role (GitHub Actions OIDC Role)
 =============================================================================
 
-Actions tested against arn:aws:ecr:ap-south-2:320644184091:repository/genesis-platform-api
+Actions tested against arn:aws:ecr:ap-south-1:320644184091:repository/genesis-platform-api
 
   ecr:GetAuthorizationToken              -> allowed   (*)
   ecr:BatchCheckLayerAvailability        -> allowed
@@ -83,6 +83,6 @@ the real simulation. Command used for each role:
   aws iam simulate-principal-policy \
     --policy-source-arn arn:aws:iam::ACCOUNT_ID:role/ROLE_NAME \
     --action-names ecr:PutImage s3:DeleteBucket \
-    --resource-arns "arn:aws:ecr:ap-south-2:ACCOUNT_ID:repository/genesis-platform-api"
+    --resource-arns "arn:aws:ecr:ap-south-1:ACCOUNT_ID:repository/genesis-platform-api"
 =============================================================================
 
