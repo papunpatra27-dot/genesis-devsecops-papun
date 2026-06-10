@@ -16,7 +16,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "devsecops_remote_state"
+    bucket = "genesis-devsecops-320644184091-tfstate"
     key    = "dev/terraform.tfstate"
     region = "ap-south-2"
   }
