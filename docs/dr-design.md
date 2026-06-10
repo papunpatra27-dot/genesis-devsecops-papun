@@ -6,7 +6,7 @@
 
 | Component | Location | Lost in ap-south-1 failure? | Recoverable without DR setup? |
 |---|---|---|---|
-| EC2 t2.micro (k3s host) | ap-south-1, single AZ | Yes — instance terminated | No — must be re-provisioned |
+| EC2 t3.micro (k3s host) | ap-south-1, single AZ | Yes — instance terminated | No — must be re-provisioned |
 | k3s runtime + config | EC2 root volume (EBS, gp3, encrypted) | Yes — EBS is AZ-local | No — must reinstall from scratch |
 | Kubernetes workload state (etcd) | EC2 root volume | Yes | Partially — Argo CD resync restores declared state; transient in-flight data lost |
 | In-memory units_db | Application process memory | Yes | No — data is ephemeral; no persistence layer |
@@ -47,7 +47,7 @@ A full regional failure is a force-majeure event that invokes a separate DR budg
 
 ### k3s Cluster Recovery
 
-The EC2 instance is re-provisioned by running `terraform apply` in `infrastructure/environments/prod/`. Terraform creates a new EC2 t2.micro from the Amazon Linux 2023 AMI in the target region. The user-data script (`modules/compute/userdata.sh.tpl`) automatically installs k3s and all in-cluster tooling on first boot. Recovery time for this step: approximately 15-20 minutes.
+The EC2 instance is re-provisioned by running `terraform apply` in `infrastructure/environments/prod/`. Terraform creates a new EC2 t3.micro from the Amazon Linux 2023 AMI in the target region. The user-data script (`modules/compute/userdata.sh.tpl`) automatically installs k3s and all in-cluster tooling on first boot. Recovery time for this step: approximately 15-20 minutes.
 
 ### Kubernetes Manifests
 
@@ -267,6 +267,6 @@ print('RECOVERY VALIDATED:', json.dumps(body))
 | **No automated DR drill** | RTO is estimated, not tested. The runbook may have errors or missing steps discovered only during a real incident. | Build a quarterly DR drill automation: a GitHub Actions workflow that provisions a parallel environment in us-west-2, runs the full runbook, executes the smoke test, captures the elapsed time, then tears down. Failures produce a drill report. | 3-5 days |
 | **k3s etcd not backed up** | If the EC2 instance root volume is corrupted (not just unavailable), etcd data is lost. Kubernetes manifests are safe in Git but any CRD state not reflected in Git (e.g., manually created Secrets, ConfigMaps) is gone. | Use `etcdctl snapshot save` daily to S3. Velero for Kubernetes object backup of the staging namespace. | 2 days |
 | **In-memory unit records** | All platform units created before the failure are permanently lost. No persistence layer means RPO is unbounded for business data. | Replace the in-memory dict with a managed database (RDS PostgreSQL, DynamoDB, or Redis). Scope and cost depend on data model requirements. | 1-2 weeks |
-| **Single-node k3s** | No HA control plane. k3s itself going down (OOM, disk full) causes a full cluster outage. | Run k3s in embedded etcd HA mode with 3 t2.micro nodes (still free-tier if within 750h total). Or use k3s with an external datastore (RDS PostgreSQL). | 2-3 days |
+| **Single-node k3s** | No HA control plane. k3s itself going down (OOM, disk full) causes a full cluster outage. | Run k3s in embedded etcd HA mode with 3 t3.micro nodes (still free-tier if within 750h total). Or use k3s with an external datastore (RDS PostgreSQL). | 2-3 days |
 | **RTO unmeasured (estimated, not tested)** | The 4-hour RTO estimate is based on component timings but has never been drilled end-to-end. The real RTO is unknown. | Automated quarterly drill (see above). Record actual elapsed time per runbook step and update the SLO documentation. | Included in drill effort |
-| **No secondary region Argo CD** | If ap-south-1 is unavailable, GitOps synchronisation cannot be initiated until a new Argo CD is installed in the recovery region. | Pre-install Argo CD in a warm-standby secondary region cluster (even a t2.micro k3s node, stopped when not needed — costs nothing). On DR, start the instance, update the Git remote, and sync. | 1 day setup, ~$0/month if stopped |
+| **No secondary region Argo CD** | If ap-south-1 is unavailable, GitOps synchronisation cannot be initiated until a new Argo CD is installed in the recovery region. | Pre-install Argo CD in a warm-standby secondary region cluster (even a t3.micro k3s node, stopped when not needed — costs nothing). On DR, start the instance, update the Git remote, and sync. | 1 day setup, ~$0/month if stopped |

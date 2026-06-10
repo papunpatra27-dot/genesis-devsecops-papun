@@ -3,11 +3,11 @@ building DevSecOps practice from the ground, first go through the whole document
 The governing principle
 •	Strong engineering on a simple foundation beats weak engineering on a complex one. A single-service API with a production-quality Kubernetes platform around it tells us more than a ten-service mesh with shortcuts.
 
-•	Stay within free tier. k3s on EC2 t2.micro runs a real Kubernetes cluster at zero cost. Any architecture requiring a paid EKS cluster is not required 
+•	Stay within free tier. k3s on EC2 t3.micro runs a real Kubernetes cluster at zero cost. Any architecture requiring a paid EKS cluster is not required 
 •	Canary is not optional. Argo Rollouts with a real metric-based promotion gate is a mandatory deliverable. Rolling updates.
 
 Cloud	Resource	Free Tier Limit & Notes
-AWS	EC2 t2.micro (k3s host)	750 hours/month — runs k3s Kubernetes cluster with Argo CD, Kyverno, Argo Rollouts, Prometheus, Grafana.
+AWS	EC2 t3.micro (k3s host)	750 hours/month — runs k3s Kubernetes cluster with Argo CD, Kyverno, Argo Rollouts, Prometheus, Grafana.
 AWS	ECR (container images)	500 MB/month — one small Python image fits easily.
 AWS	S3 (Terraform state + Velero backups)	5 GB — Terraform state files + DR backup snapshots.
 AWS	DynamoDB (state locking)	25 GB + PAY_PER_REQUEST — stays free under normal usage.
@@ -16,7 +16,7 @@ AWS	CloudWatch (basic)	Basic metrics free; 5 GB log ingestion/month — suppleme
 GitHub	GitHub Actions (public repo)	2,000 minutes/month — runs all pipeline stages comfortably.
 In-cluster	Argo CD, Argo Rollouts, Kyverno, Prometheus, Grafana, Loki	All open-source, deployed via Helm to k3s. Zero cost.
 
-k3s setup note: Install k3s on your EC2 t2.micro with a single command: curl -sfL https://get.k3s.io | sh - . Argo CD and Kyverno install via Helm in under 15 minutes. If you prefer kind or minikube locally, that is acceptable.
+k3s setup note: Install k3s on your EC2 t3.micro with a single command: curl -sfL https://get.k3s.io | sh - . Argo CD and Kyverno install via Helm in under 15 minutes. If you prefer kind or minikube locally, that is acceptable.
 
 
 task 1 for terraform:

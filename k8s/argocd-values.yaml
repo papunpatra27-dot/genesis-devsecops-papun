@@ -12,7 +12,7 @@
 #     --version 7.x \
 #     -f k8s/argocd-values.yaml
 #
-# This configuration is optimised for k3s single-node on EC2 t2.micro.
+# This configuration is optimised for k3s single-node on EC2 t3.micro.
 # Resource limits are conservative to leave headroom for the app + monitoring.
 ##############################################################################
 
@@ -29,7 +29,7 @@ global:
 server:
   # NodePort exposure — accessible at http://<EC2-EIP>:30080
   # HTTPS is terminated at the ALB or NGINX ingress; Argo CD runs insecure
-  # internally to avoid certificate management complexity on t2.micro.
+  # internally to avoid certificate management complexity on t3.micro.
   service:
     type: NodePort
     nodePortHttp: 30080
@@ -156,13 +156,13 @@ configs:
       g, admin, role:admin
 
 ## ──────────────────────────────────────────────────────────────────────────
-## Disable HA components (single-node k3s on t2.micro)
+## Disable HA components (single-node k3s on t3.micro)
 ## ──────────────────────────────────────────────────────────────────────────
 applicationSet:
   enabled: false    # Not needed for single-repo single-env
 
 notifications:
-  enabled: false    # Reduce memory footprint on t2.micro
+  enabled: false    # Reduce memory footprint on t3.micro
 
 dex:
   enabled: false    # SSO not required; admin password auth is sufficient

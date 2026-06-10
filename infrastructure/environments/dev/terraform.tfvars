@@ -16,7 +16,7 @@ availability_zones   = ["ap-south-1a", "ap-south-1b"]
 admin_cidr           = "106.196.13.220/32" # system ip
 
 # Compute
-ec2_instance_type  = "t2.micro"
+ec2_instance_type  = "t3.micro"
 k3s_ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHqUwvODDeV6fYfSoeC3WuOIwQ6Jn4IRyyoTJGNeBqv6 genesis-k3s"
 
 # GitHub OIDC

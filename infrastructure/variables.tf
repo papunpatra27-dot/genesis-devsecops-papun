@@ -56,9 +56,9 @@ variable "availability_zones" {
 }
 
 variable "ec2_instance_type" {
-  description = "EC2 instance type for the k3s control-plane node. Free tier: t2.micro."
+  description = "EC2 instance type for the k3s control-plane node. Free tier: t3.micro."
   type        = string
-  default     = "t2.micro"
+  default     = "t3.micro"
 }
 
 variable "k3s_ssh_public_key" {

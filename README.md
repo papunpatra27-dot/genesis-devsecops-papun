@@ -32,7 +32,7 @@ A production-quality DevSecOps reference implementation built on AWS Free Tier r
 │               └── Canary smoke test                         │
 │                                                             │
 │  AWS (Free Tier)                                            │
-│  ├── EC2 t2.micro ──── k3s cluster                         │
+│  ├── EC2 t3.micro ──── k3s cluster                         │
 │  │   ├── Argo CD (GitOps controller)                        │
 │  │   ├── Argo Rollouts (canary: 10→25→50→100%)             │
 │  │   ├── Kyverno (admission enforcement)                    │
@@ -69,7 +69,7 @@ genesis-devsecops-papun/
 │   ├── variables.tf              # Global variables
 │   ├── modules/
 │   │   ├── networking/           # VPC, subnets, IGW, security groups, flow logs
-│   │   ├── compute/              # EC2 t2.micro, key pair, EIP, user-data k3s bootstrap
+│   │   ├── compute/              # EC2 t3.micro, key pair, EIP, user-data k3s bootstrap
 │   │   ├── iam/                  # k3s node role, GitHub OIDC, deployment role
 │   │   ├── ecr/                  # Repository, lifecycle policy, image scanning
 │   │   └── observability/        # CloudWatch logs, SNS alerts, alarms

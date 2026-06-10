@@ -34,7 +34,7 @@ slo:
   #   1. Load tests showed p99 < 200 ms with <0.1% errors under nominal load.
   #   2. Service is internal operations tooling (not direct customer-facing SaaS)
   #      but tenant data pipelines depend on it — warrants three nines.
-  #   3. Free-tier EC2 t2.micro has burstable CPU; 99.99% is unrealistic.
+  #   3. Free-tier EC2 t3.micro has burstable CPU; 99.99% is unrealistic.
   window: 30d
 
 error_budget:

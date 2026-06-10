@@ -7,7 +7,7 @@ The Genesis Platform API is an internal operations tool consumed by tenant data 
 Three concrete data points from actual API runs informed the choice:
 
 1. **Load test results** (30-minute run, 50 concurrent users): P99 latency was 187 ms, P50 was 41 ms, and the measured error rate was 0.03%. The inherent error rate is well below 0.1%, so 99.9% is achievable without heroic effort.
-2. **Infrastructure constraint**: the k3s node runs on a single EC2 t2.micro with burstable CPU. A CPU credit exhaustion event could cause 60-90 seconds of elevated latency or errors. One such event per month would consume approximately 0.2% of availability. 99.99% (4.4 minutes/month) is structurally unachievable on this infrastructure without a load balancer and auto-scaling group. 99.9% (43.8 minutes/month) has enough headroom to absorb one maintenance window per month.
+2. **Infrastructure constraint**: the k3s node runs on a single EC2 t3.micro with burstable CPU. A CPU credit exhaustion event could cause 60-90 seconds of elevated latency or errors. One such event per month would consume approximately 0.2% of availability. 99.99% (4.4 minutes/month) is structurally unachievable on this infrastructure without a load balancer and auto-scaling group. 99.9% (43.8 minutes/month) has enough headroom to absorb one maintenance window per month.
 3. **Business SLA**: the product team confirmed a recovery time of 30 minutes is acceptable to tenants. 99.9% maps to 43.8 minutes of allowed downtime per 30-day window, which comfortably accommodates a 30-minute RTO.
 
 ## Fast Burn vs Slow Burn Alerts — Plain English

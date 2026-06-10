@@ -60,7 +60,7 @@ All open-source, deployed via Helm to k3s. Zero cost."
 
 And:
 
-"k3s setup note: Install k3s on your EC2 t2.micro with a single command:
+"k3s setup note: Install k3s on your EC2 t3.micro with a single command:
 curl -sfL https://get.k3s.io | sh -. 
 Argo CD and Kyverno install via Helm in under 15 minutes."
 

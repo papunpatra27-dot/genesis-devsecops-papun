@@ -29,7 +29,7 @@ Terraform creates:
   ✓ Security Groups
   ✓ IAM Roles (for k3s EC2 node + GitHub Actions)
   ✓ ECR Repository (genesis-platform-api)
-  ✓ EC2 Instance (t2.micro, Amazon Linux 2023)
+  ✓ EC2 Instance (t3.micro, Amazon Linux 2023)
   ✓ Elastic IP
   ✓ CloudWatch resources
 

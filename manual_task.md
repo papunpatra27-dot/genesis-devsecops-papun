@@ -1086,7 +1086,7 @@ ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIxxxxxxxx genesis-k3s
 
 ### 1.5 — Confirm Free-Tier Region
 
-Verify you are working in `ap-south-1` (North Virginia). All resources in this project are in that region. The EC2 t2.micro free tier applies to a single region.
+Verify you are working in `ap-south-1` (North Virginia). All resources in this project are in that region. The EC2 t3.micro free tier applies to a single region.
 
 ```bash
 aws ec2 describe-regions --region-names ap-south-1 --profile terraform-bootstrap

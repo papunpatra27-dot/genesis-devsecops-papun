@@ -44,7 +44,7 @@ STEP 3 - ECR REGISTRY:
   ✓ Lifecycle: Keep 5 tagged images, expire untagged after 1 day
 
 STEP 4 - EC2 COMPUTE:
-  ✓ Instance: t2.micro in public subnet
+  ✓ Instance: t3.micro in public subnet
   ✓ AMI: Amazon Linux 2023 (latest)
   ✓ Root volume: 20GB gp3, encrypted EBS
   ✓ IMDSv2: ENFORCED (required tokens)

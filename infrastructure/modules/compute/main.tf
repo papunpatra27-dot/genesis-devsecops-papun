@@ -1,6 +1,6 @@
 ##############################################################################
 # modules/compute/main.tf
-# Provisions the EC2 t2.micro instance that hosts the k3s Kubernetes cluster,
+# Provisions the EC2 t3.micro instance that hosts the k3s Kubernetes cluster,
 # a matching key pair, and the IAM instance profile.
 ##############################################################################
 

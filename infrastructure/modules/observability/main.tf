@@ -52,7 +52,7 @@ resource "aws_sns_topic_subscription" "email" {
 # CloudWatch Alarms
 ##############################################################################
 
-# High CPU — k3s might be overloaded (t2.micro is burstable)
+# High CPU — k3s might be overloaded (t3.micro is burstable)
 resource "aws_cloudwatch_metric_alarm" "cpu_high" {
   alarm_name          = "${var.project}-${var.environment}-k3s-cpu-high"
   comparison_operator = "GreaterThanOrEqualToThreshold"

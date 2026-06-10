@@ -1,6 +1,6 @@
 # compute
 
-This module launches the EC2 t2.micro instance that runs a k3s single-node Kubernetes cluster and attaches the IAM instance profile created by the `iam` module. The user-data script installs k3s, Helm, Argo CD, Kyverno, and the Prometheus stack automatically on first boot.
+This module launches the EC2 t3.micro instance that runs a k3s single-node Kubernetes cluster and attaches the IAM instance profile created by the `iam` module. The user-data script installs k3s, Helm, Argo CD, Kyverno, and the Prometheus stack automatically on first boot.
 
 ## Inputs
 
@@ -9,7 +9,7 @@ This module launches the EC2 t2.micro instance that runs a k3s single-node Kuber
 | project | Project name prefix. | string | — | yes |
 | environment | Deployment environment. | string | — | yes |
 | aws_region | AWS region. | string | — | yes |
-| instance_type | EC2 instance type. | string | t2.micro | no |
+| instance_type | EC2 instance type. | string | t3.micro | no |
 | subnet_id | Public subnet ID to launch into. | string | — | yes |
 | security_group_id | Security group ID for the instance. | string | — | yes |
 | ssh_public_key | Public SSH key material. | string | — | yes |
