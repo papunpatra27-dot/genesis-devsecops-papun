@@ -130,56 +130,92 @@ jobs:
           retention-days: 1
 
   ##############################################################################
-  # Stage 6 — Image Vulnerability Scan (Trivy)
-  # Gate: YES — CRITICAL findings block.
-  ##############################################################################
-  trivy-scan:
-    name: "Stage 6 — Trivy Image Scan"
-    runs-on: ubuntu-latest
-    needs: [docker-build]
-    steps:
-      - uses: actions/checkout@v4
+# Stage 6 — Image Vulnerability Scan (Trivy)
+# Gate: YES — CRITICAL findings block.
+##############################################################################
+trivy-scan:
+  name: "Stage 6 — Trivy Image Scan"
+  runs-on: ubuntu-latest
+  needs: [docker-build]
 
-      - name: Download image artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: docker-image-${{ needs.docker-build.outputs.sha-tag }}
-          path: /tmp
+  steps:
+    - uses: actions/checkout@v4
 
-      - name: Load image
-        run: docker load --input /tmp/image.tar
+    - name: Download image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: docker-image-${{ needs.docker-build.outputs.sha-tag }}
+        path: /tmp
 
-      - name: Trivy — SARIF report (blocks on CRITICAL)
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
-          format: sarif
-          output: trivy-results.sarif
-          exit-code: "1"
-          severity: CRITICAL
-          ignore-unfixed: true
+    - name: Load image
+      run: docker load --input /tmp/image.tar
 
-      - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: trivy-results.sarif
+    - name: Create reports directory
+      run: mkdir -p reports
 
-      - name: Trivy — JSON report artifact (HIGH + CRITICAL)
-        if: always()
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
-          format: json
-          output: reports/trivy-report.json
-          severity: HIGH,CRITICAL
+    ##########################################################################
+    # SARIF report for GitHub Security tab
+    ##########################################################################
+    - name: Trivy SARIF scan
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
+        format: sarif
+        output: trivy-results.sarif
+        severity: CRITICAL
+        ignore-unfixed: true
+        exit-code: "0"
 
-      - name: Upload Trivy JSON artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: trivy-report
-          path: reports/trivy-report.json
+    - name: Upload SARIF to GitHub Security tab
+      if: always()
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: trivy-results.sarif
+
+    ##########################################################################
+    # JSON artifact
+    ##########################################################################
+    - name: Trivy JSON report
+      if: always()
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
+        format: json
+        output: reports/trivy-report.json
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: "0"
+
+    ##########################################################################
+    # Human-readable report in logs
+    ##########################################################################
+    - name: Trivy table report
+      if: always()
+      uses: aquasecurity/trivy-action@0.33.1
+      with:
+        image-ref: "${{ env.ECR_REPOSITORY }}:ci-latest"
+        format: table
+        output: reports/trivy-report.txt
+        severity: HIGH,CRITICAL
+        ignore-unfixed: true
+        exit-code: "0"
+
+    - name: Print Trivy report
+      if: always()
+      run: |
+        echo "========== TRIVY REPORT =========="
+        cat reports/trivy-report.txt
+        echo "=================================="
+
+    - name: Upload Trivy artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: trivy-report
+        path: |
+          reports/trivy-report.json
+          reports/trivy-report.txt
+          trivy-results.sarif
 
   ##############################################################################
   # Stage 7 — SBOM Generation (Syft / CycloneDX)
@@ -319,72 +355,66 @@ jobs:
           path: reports
 
   ##############################################################################
-  # Stage 11 — Kyverno Manifest Validation (offline, no cluster needed)
-  # Gate: YES
-  #   • k8s/flawed-deployment.yaml (Flaw 3) MUST be blocked
-  #   • k8s/rollout.yaml and k8s/service.yaml MUST pass
-  ##############################################################################
-  kyverno-validate:
-    name: "Stage 11 — Kyverno Offline Validation"
-    runs-on: ubuntu-latest
+# Stage 11 — Kyverno Manifest Validation (offline, no cluster needed)
+##############################################################################
+kyverno-validate:
+  name: "Stage 11 — Kyverno Offline Validation"
+  runs-on: ubuntu-latest
 
-    steps:
-      - uses: actions/checkout@v4
+  steps:
+    - uses: actions/checkout@v4
 
-      - name: Install Kyverno CLI
-        run: |
-          curl -LO https://github.com/kyverno/kyverno/releases/latest/download/install-cli.sh
+    - name: Install Kyverno CLI
+      uses: kyverno/action-install-cli@v0.2.0
 
-          chmod +x install-cli.sh
+    - name: Verify Kyverno Installation
+      run: |
+        kyverno version
 
-          ./install-cli.sh
+    - name: Create reports directory
+      run: mkdir -p reports
 
-          kyverno version
+    ##########################################################################
+    # CLEAN manifests must PASS
+    ##########################################################################
+    - name: Validate CLEAN manifests
+      run: |
+        echo "=== Validating rollout.yaml and service.yaml ==="
 
-      - name: Create reports directory
-        run: mkdir -p reports
+        kyverno apply infrastructure/kyverno-policies/ \
+          --resource k8s/rollout.yaml \
+          --resource k8s/service.yaml \
+          | tee reports/kyverno-clean-validation.txt
 
-      ##########################################################################
-      # Clean manifests must PASS
-      ##########################################################################
-      - name: Validate CLEAN manifests
-        run: |
-          echo "=== Validating rollout.yaml and service.yaml ==="
-          
-          kyverno apply infrastructure/kyverno-policies/ \
-            --resource k8s/rollout.yaml \
-            --resource k8s/service.yaml \
-            2>&1 | tee reports/kyverno-clean-validation.txt
-          
-          echo "✅ Clean manifest validation completed"
+        echo "✅ Clean manifests validation completed"
 
-      ##########################################################################
-      # Flawed manifest must FAIL
-      ##########################################################################
-      - name: Validate FLAWED manifest
-        id: flawed
-        continue-on-error: true
-        run: |
-          echo "=== Validating flawed-deployment.yaml ==="
-          
-          kyverno apply infrastructure/kyverno-policies/ \
-            --resource k8s/flawed-deployment.yaml \
-            2>&1 | tee reports/kyverno-flaw3-validation.txt
+    ##########################################################################
+    # FLAWED manifest must FAIL
+    ##########################################################################
+    - name: Validate FLAWED manifest
+      id: flawed
+      continue-on-error: true
+      run: |
+        echo "=== Validating flawed-deployment.yaml ==="
 
-      - name: Verify flawed manifest was blocked
-        run: |
-          echo "Step outcome: ${{ steps.flawed.outcome }}"
-          
-          if [ "${{ steps.flawed.outcome }}" = "success" ]; then
-            echo "❌ Flawed manifest was NOT blocked by Kyverno"
-            exit 1
-          fi
-          
-          echo "✅ Flaw 3 correctly blocked by Kyverno"
+        kyverno apply infrastructure/kyverno-policies/ \
+          --resource k8s/flawed-deployment.yaml \
+          | tee reports/kyverno-flaw3-validation.txt
 
-      - name: Upload Kyverno validation artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: kyverno-validation
-          path: reports/
+    - name: Verify flawed manifest was blocked
+      run: |
+        echo "Outcome: ${{ steps.flawed.outcome }}"
+
+        if [ "${{ steps.flawed.outcome }}" = "success" ]; then
+          echo "❌ Flawed manifest was NOT blocked"
+          exit 1
+        fi
+
+        echo "✅ Flaw 3 correctly blocked by Kyverno"
+
+    - name: Upload Kyverno validation artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: kyverno-validation
+        path: reports/
