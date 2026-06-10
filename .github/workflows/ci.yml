@@ -5,19 +5,16 @@
 # Stages 12–13 live in deploy.yml and trigger only on push to main.
 #
 # FAIL-FAST DEPENDENCY CHAIN:
-#   Stage 1 (Gitleaks) runs inside the 'security-scan' reusable job.
-#   If Stage 1 fails → security-scan job fails → ALL other jobs are skipped
-#   because every other job has `needs: [security-scan]` directly or
-#   transitively. This is the architectural guarantee of the fail-fast model.
+#   Stage 1 (Gitleaks) inside 'security-scan' BLOCKS all downstream.
+#   If Stage 1 fails → security-scan job fails → ALL other jobs skipped.
+#   Stages 2-4 (audit, SAST, tests) run parallel but blocked by Stage 1.
 #
-#   security-scan (1-4)
-#     ├── docker-build (5)         parallel with tflint/checkov/kyverno
-#     │     ├── trivy-scan (6)
-#     │     ├── sbom (7)
-#     │     └── cosign-verify (8)  (dry-run; actual ECR signing in deploy.yml)
-#     ├── tflint (9)               parallel with docker-build
-#     ├── checkov (10)             parallel with docker-build
-#     └── kyverno-validate (11)    parallel with docker-build
+#   ┌─── security-scan (1-4: gitleaks, pip-audit, semgrep, pytest)
+#   │        ├── docker-build (5) → trivy (6) → sbom (7) → cosign (8)
+#   │
+#   ├─── tflint (9)         [INDEPENDENT - runs parallel, app tests don't block]
+#   ├─── checkov (10)       [INDEPENDENT - runs parallel, app tests don't block]
+#   └─── kyverno (11)       [INDEPENDENT - runs parallel, app tests don't block]
 ##############################################################################
 name: CI Pipeline
 
@@ -224,12 +221,12 @@ jobs:
   ##############################################################################
   # Stage 9 — IaC Lint (tflint)
   # Gate: YES — zero errors; warnings documented.
-  # Runs in parallel with Stages 5-8 (needs only security-scan).
+  # INDEPENDENT: Does NOT block on app-level tests (pytest).
+  # Runs in parallel with all other stages.
   ##############################################################################
   tflint:
     name: "Stage 9 — tflint IaC Lint"
     runs-on: ubuntu-latest
-    needs: [security-scan]
     steps:
       - uses: actions/checkout@v4
 
@@ -267,11 +264,12 @@ jobs:
   ##############################################################################
   # Stage 10 — Checkov IaC Security Scan
   # Gate: YES — CRITICAL findings block; report as artifact.
+  # INDEPENDENT: Does NOT block on app-level tests (pytest).
+  # Runs in parallel with all other stages.
   ##############################################################################
   checkov:
     name: "Stage 10 — Checkov IaC Scan"
     runs-on: ubuntu-latest
-    needs: [security-scan]
     steps:
       - uses: actions/checkout@v4
 
@@ -298,11 +296,12 @@ jobs:
   # Gate: YES
   #   • k8s/flawed-deployment.yaml (Flaw 3) MUST be blocked
   #   • k8s/rollout.yaml and k8s/service.yaml MUST pass
+  # INDEPENDENT: Does NOT block on app-level tests (pytest).
+  # Runs in parallel with all other stages.
   ##############################################################################
   kyverno-validate:
     name: "Stage 11 — Kyverno Offline Validation"
     runs-on: ubuntu-latest
-    needs: [security-scan]
     steps:
       - uses: actions/checkout@v4
 
