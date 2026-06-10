@@ -15,7 +15,11 @@ terraform {
     }
   }
 
-  backend "s3" {}
+  backend "s3" {
+    bucket = "devsecops_remote_state"
+    key    = "dev/terraform.tfstate"
+    region = "ap-south-2"
+  }
 }
 
 provider "aws" {
