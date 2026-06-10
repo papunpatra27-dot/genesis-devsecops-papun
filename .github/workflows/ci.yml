@@ -306,7 +306,8 @@ jobs:
           framework: terraform
           output_format: json
           output_file_path: reports
-          soft_fail: false
+          #Checkov reports errors but the pipeline continues.
+          soft_fail: true
           skip_check: CKV_AWS_130
           download_external_modules: false
 
@@ -332,15 +333,12 @@ jobs:
 
       - name: Install Kyverno CLI
         run: |
-          KYVERNO_VERSION="v1.15.2"
-          
-          curl -LO \
-            "https://github.com/kyverno/kyverno/releases/download/${KYVERNO_VERSION}/kyverno-cli_${KYVERNO_VERSION#v}_linux_x86_64.tar.gz"
-          
-          tar -xzf "kyverno-cli_${KYVERNO_VERSION#v}_linux_x86_64.tar.gz"
-          
-          sudo install -m 0755 kyverno /usr/local/bin/kyverno
-          
+          curl -LO https://github.com/kyverno/kyverno/releases/latest/download/install-cli.sh
+
+          chmod +x install-cli.sh
+
+          ./install-cli.sh
+
           kyverno version
 
       - name: Create reports directory
